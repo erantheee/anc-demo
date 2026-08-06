@@ -99,10 +99,35 @@
 
     <!-- ANC -->
     <section class="card" id="card-anc">
-      <h2>主动降噪 ANC</h2>
-      <div class="anc-placeholder">
-        <p>ANC 尚未接入本里程碑。</p>
-        <p>当前阶段：测量 → 确认噪声特征 → 定位静音区。下一步在此基础上接谐波/宽带降噪。</p>
+      <h2>主动降噪 ANC（实时）</h2>
+      <form id="anc-form" class="grid-form">
+        <label class="check"><input type="checkbox" id="anc-synthetic" checked> 合成模式</label>
+        <label>输入设备
+          <select id="anc-in-device"><option value="">默认</option></select>
+        </label>
+        <label>输出设备
+          <select id="anc-out-device"><option value="">默认</option></select>
+        </label>
+        <label>基频 f0(Hz) <input type="number" id="anc-f0" placeholder="自动估计"></label>
+        <label>输出增益 <input type="number" id="anc-gain" value="0.4" step="0.05"></label>
+        <label>基线(s) <input type="number" id="anc-baseline" value="5" step="1"></label>
+        <label>时长(s) <input type="number" id="anc-duration" value="60" step="5"></label>
+        <button type="submit" id="anc-start" class="primary">开始 ANC</button>
+        <button type="button" id="anc-stop" class="danger">停止</button>
+      </form>
+      <div class="anc-status">
+        <div class="row"><span>状态</span><strong id="anc-state">空闲</strong></div>
+        <div class="row"><span>相位</span><strong id="anc-phase">—</strong></div>
+        <div class="row"><span>基频</span><strong id="anc-f0-now">—</strong></div>
+        <div class="row"><span>基线 SPL</span><strong id="anc-base-db">—</strong></div>
+        <div class="row"><span>实时 SPL</span><strong id="anc-now-db">—</strong></div>
+        <div class="row"><span>总降噪</span><strong id="anc-reduction">—</strong></div>
+      </div>
+      <canvas id="anc-trend" width="640" height="140"></canvas>
+      <p class="hint">流程：采基线（ANC off）→ 估计基频 → 实时输出反相谐波。对步进电机 / 风扇 / 压缩机等稳态周期噪声有效。</p>
+      <div id="anc-report" class="anc-report hidden">
+        <h3>A/B 降噪报告</h3>
+        <div id="anc-report-body"></div>
       </div>
     </section>
   </main>

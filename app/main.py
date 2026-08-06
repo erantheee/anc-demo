@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from app.anc.live import LiveANCEngine
 from app.grid import GridWorker
 from app.monitor import Monitor
 from app.quiet_zone import check_feasibility
@@ -16,6 +17,7 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 
 monitor = Monitor()
 grid_worker = GridWorker(monitor=monitor)
+anc_live: LiveANCEngine | None = None
 
 
 @asynccontextmanager
@@ -49,6 +51,18 @@ class GridRequest(BaseModel):
 class ANCRequest(BaseModel):
     mode: str = "harmonic"
     fs: int = 16000
+
+
+class ANCLiveRequest(BaseModel):
+    fs: int = 48000
+    in_device: str | None = None   # 误差麦克风设备
+    out_device: str | None = None  # 扬声器输出设备
+    f0: float | None = None
+    gain: float = 0.4
+    baseline_s: float = 5.0
+    duration_s: float = 60.0
+    synthetic: bool = False
+    echo_gain: float = 0.15
 
 
 class QuietZoneRequest(BaseModel):
@@ -153,6 +167,83 @@ def anc_start(req: ANCRequest) -> dict:
         "algorithm": req.mode,
         "reduction_db": round(res["reduction_db"], 2),
         "f0": res.get("f0"),
+    }
+
+
+@app.get("/api/audio/devices")
+def audio_devices() -> dict:
+    """列出音频设备（输入/输出），供 ANC 现场配置。"""
+    try:
+        import sounddevice as sd
+    except ImportError:
+        return {"devices": [], "default": None, "error": "未安装 sounddevice"}
+    devs = []
+    for i, dev in enumerate(sd.query_devices()):
+        devs.append({
+            "index": i,
+            "name": dev["name"],
+            "in_channels": int(dev["max_input_channels"]),
+            "out_channels": int(dev["max_output_channels"]),
+            "default_samplerate": int(dev["default_samplerate"]),
+        })
+    return {"devices": devs, "default": {"in": sd.default.device[0], "out": sd.default.device[1]}}
+
+
+@app.post("/api/anc/live/start")
+def anc_live_start(req: ANCLiveRequest) -> dict:
+    """启动实时 ANC 环路（自参考谐波消除）。"""
+    global anc_live
+    if anc_live is not None and anc_live._thread is not None and anc_live._thread.is_alive():
+        return {"started": False, "message": "ANC 已在运行，请先停止"}
+    anc_live = LiveANCEngine(
+        fs=req.fs, in_device=req.in_device or None, out_device=req.out_device or None,
+        f0=req.f0, output_gain=req.gain, baseline_s=req.baseline_s,
+        max_duration_s=req.duration_s, synthetic=req.synthetic,
+        echo_gain=req.echo_gain)
+    return anc_live.start()
+
+
+@app.post("/api/anc/live/stop")
+def anc_live_stop() -> dict:
+    """停止实时 ANC，返回最终状态。"""
+    global anc_live
+    if anc_live is None:
+        return {"state": "idle", "phase": "idle"}
+    st = anc_live.stop()
+    return st
+
+
+@app.get("/api/anc/live/status")
+def anc_live_status() -> dict:
+    """实时 ANC 状态快照（仪表盘轮询）。"""
+    global anc_live
+    if anc_live is None:
+        return {"state": "idle", "phase": "idle", "synthetic": False}
+    return anc_live.status()
+
+
+@app.get("/api/anc/live/report")
+def anc_live_report() -> dict:
+    """实时 ANC 完成后的 A/B 降噪报告。"""
+    global anc_live
+    if anc_live is None:
+        return {"found": False}
+    d, e = anc_live.get_signals()
+    if d is None or e is None or len(d) == 0 or len(e) == 0:
+        return {"found": False}
+    from app.evaluate import evaluate_before_after
+
+    fs = anc_live.fs
+    st = anc_live.status()
+    rep = evaluate_before_after(d, e, fs=fs)
+    return {
+        "found": True,
+        "f0_hz": st["f0"],
+        "baseline_spl_db": st["baseline_spl_db"],
+        "cancelling_spl_db": st["cancelling_spl_db"],
+        "broadband_reduction_db": rep["broadband_reduction_db"],
+        "a_weighted_reduction_db": rep["a_weighted_reduction_db"],
+        "peak_reductions": rep["peak_reductions"][:5],
     }
 
 

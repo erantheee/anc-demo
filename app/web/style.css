@@ -184,15 +184,30 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #qz-verdict.poor { color: var(--bad); }
 #recommend-body { font-size: 13px; color: var(--text); line-height: 1.6; }
 
-/* ANC 占位 */
-.anc-placeholder {
-  border: 1px dashed var(--border);
-  border-radius: 10px;
-  padding: 18px;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.8;
-  text-align: center;
+/* ANC 实时卡片 */
+.anc-status {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 6px 14px;
+  margin: 12px 0 8px;
 }
+.anc-status .row { font-size: 12px; }
+#anc-trend {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card-2);
+}
+.anc-report {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--card-2);
+}
+.anc-report h3 { font-size: 13px; color: var(--accent); margin-bottom: 8px; }
+.anc-report .row { margin-bottom: 5px; }
+.anc-report .good { color: var(--good); }
+button.danger { border-color: rgba(248, 113, 113, 0.5); color: #fca5a5; }
 
 footer { text-align: center; color: var(--muted); font-size: 12px; padding: 18px 0 28px; }

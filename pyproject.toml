@@ -35,6 +35,7 @@ dev = [
 anc-measure = "scripts.measure:main"
 anc-calibrate = "scripts.calibrate_mic:main"
 anc-run = "scripts.run_anc:main"
+anc-live = "scripts.run_anc_live:main"
 
 [tool.setuptools.packages.find]
 include = ["app*", "scripts*"]

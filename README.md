@@ -50,7 +50,15 @@
 ```sh
 .venv/bin/python scripts/calibrate-mic.py --known-spl 75   # 用手机声级计 APP 对照
 .venv/bin/python scripts/measure.py --grid "0,0 1.5,0 0,1.5 1.5,1.5" --duration 30 --out data/reports/room-001
-.venv/bin/python scripts/run-anc.py --mode harmonic        # 实时 ANC（需要 I2S 编解码器）
+```
+
+实时 ANC（M2，自参考谐波消除，无需参考麦克风 / I2S 编解码器）：
+
+```sh
+.venv/bin/python scripts/run_anc_live.py --list                 # 列出输入/输出设备
+.venv/bin/python scripts/run_anc_live.py --synthetic --duration 15   # 无硬件自测
+.venv/bin/python scripts/run_anc_live.py --in-device "USB Mic" --out-device "3.5mm" \
+    --fs 48000 --baseline 5 --duration 60                        # 现场真机
 ```
 
 Web UI / API（沿用了此前 Web 服务习惯）：
@@ -66,6 +74,9 @@ Web UI / API（沿用了此前 Web 服务习惯）：
 - **房间建模**：配置网格（范围/步长/每点时长）→ 后台测量 → 交互式噪声地图，
   自动建议静音区（圆 = 安静区直径），点选地图任意点查看 ANC 可行性
   （距离 / 传播延迟 / 安静区直径 / 结论）
+- **ANC 实时降噪**：合成模式或真机模式；采基线（ANC off）→ 自动估计基频 →
+  实时输出反相谐波；实时 SPL 曲线与总降噪量，完成后给出 A/B 报告
+  （宽带 / A 加权 / 各音调峰值降低 dB）
 
 合成模式（无硬件自测）：仪表盘勾选"合成模式"，或用环境变量
 
@@ -80,7 +91,7 @@ ANC_SYNTHETIC=1 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8
 | M0 | 硬件准备与校准：音频 I/O 验证、麦克风灵敏度标定 | 待启动 |
 | M1 | 噪声测量与来源确认：网格录音 → 噪声地图 + 频谱 + 来源归属 + 是否需要降噪建议 | **第一步** |
 | M1.5 | Web 仪表盘：实时噪声 + Pi 状态 + 交互式噪声地图与静音区建议 | **已完成** |
-| M2 | ANC Demo：参考麦 + 误差麦 + 扬声器，FXLMS / 谐波消除，A/B 评估 | 待启动 |
+| M2 | ANC Demo：实时谐波消除（自参考，单误差麦 + 扬声器），A/B 评估；FXLMS 离线模拟预留 | **已完成** |
 | M3 | 空间建模与位置闭环：摄像头建模房间 → 定位打印机 → 引导静音区与 ANC 参数 | 待启动 |
 | M4 | 迭代场景：空调 / 风枪 / 风机 / 门外扫地机器人 Profile 抽象 | 待启动 |
 

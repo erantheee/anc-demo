@@ -65,6 +65,7 @@ app/
 ├── anc/
 │   ├── fxlms.py    Filtered-x LMS 自适应滤波
 │   ├── harmonic.py 周期噪声谐波消除（自适应陷波 / PLL 基频跟踪）
+│   ├── live.py     实时引擎：block 级谐波消除 + 双工流线程（自参考，无需参考麦）
 │   └── pipeline.py ANC 控制器：状态机 + 参数 + 报告
 ├── synth.py        合成 3D 打印机噪声（步进音调 + 风扇宽带），离线自测
 data/
@@ -74,7 +75,8 @@ data/
 scripts/
 ├── measure.py      CLI：网格录音 → 分析 → 报告
 ├── calibrate-mic.py CLI：麦克风灵敏度标定
-└── run-anc.py      CLI：ANC 环路（实时或模拟）
+├── run-anc.py      CLI：ANC 环路（实时或模拟）
+└── run_anc_live.py CLI：现场实时 ANC（--list / --synthetic / 设备选择 / A/B 报告）
 ```
 
 ## 关键技术点
@@ -132,6 +134,58 @@ flowchart LR
 - [ ] 点选地图任意点，返回距离 / 传播延迟 / 安静区直径 / 可行性结论。
 - [ ] `ANC_SYNTHETIC=1` 时无硬件即可跑通全部流程（本机自测）。
 - [ ] 系统在 Pi 上以 systemd 服务自启（`anc-demo.service` 不变，端口 8000）。
+
+## 里程碑 M2 — 实时 ANC Demo
+
+已实现。核心：**自参考谐波消除**——无需参考麦克风 / I2S 编解码器，单支误差麦 +
+一个音频输出即可现场演示，正合"快速验证 demo"的目标。对步进电机、风扇叶片、
+压缩机等稳态周期噪声有效（M1 测量的 3D 打印机属此类）。
+
+### 为什么不需要参考麦（相比原计划）
+
+- 谐波消除器直接从**误差信号**估计基频并跟踪各谐波幅度/相位（`app/anc/harmonic.py`），
+  是自参考的，不需要额外参考麦。
+- FXLMS 前馈需要参考麦，离线模拟已实现（`app/anc/fxlms.py`），等 WM8960 到位后
+  通过 `LiveANCEngine` 扩展为参考+误差两路即可。
+
+### 实现
+
+| 文件 | 说明 |
+|---|---|
+| `app/anc/live.py` | `BlockHarmonicCanceller`（向量化 block NLMS）+ `LiveANCEngine`（双工流线程，A/B 分段采集） |
+| `scripts/run_anc_live.py` | 现场 CLI：`--list` / `--synthetic` / `--in-device` / `--out-device` / `--f0` / `--gain` / `--baseline` |
+| `app/main.py` | `/api/anc/live/start|stop|status|report`、`/api/audio/devices` |
+| `app/web/` | ANC 卡片：状态 / 实时 SPL 曲线 / 降噪量 / A/B 报告 |
+
+### API
+
+| 端点 | 方法 | 说明 |
+|---|---|---|
+| `/api/anc/live/start` | POST | `{synthetic, in_device, out_device, f0, gain, baseline_s, duration_s}` |
+| `/api/anc/live/stop` | POST | 停止并返回最终状态 |
+| `/api/anc/live/status` | GET | 状态 / 相位（baseline→cancelling→done）/ SPL / 降噪量 |
+| `/api/anc/live/report` | GET | 完成后 A/B 报告（宽带 / A 加权 / 音调峰值降低） |
+| `/api/audio/devices` | GET | 列出输入/输出设备，供前端下拉选择 |
+
+### 现场操作指引（Pi）
+
+1. `python scripts/run_anc_live.py --list` 确认输入（USB 麦）与输出设备名称。
+2. 噪声源保持运行（打印机打印中 / 风扇运转）；麦克风放在"想要安静的点"。
+3. 扬声器接 Pi 音频输出（3.5mm/HDMI 或 USB 音箱），音量从小调起。
+4. `--baseline 5 --duration 60`，输出增益默认 0.4；若啸叫/不收敛则降低 `--gain`。
+5. 仪表盘 ANC 卡片同流程：选设备 → 开始 ANC → 看实时 SPL 下降与 A/B 报告。
+
+### 合成模式自测
+
+`python scripts/run_anc_live.py --synthetic --baseline 3 --duration 15`：基线估计
+f0≈120 Hz，谐波峰值降 ~14–17 dB，宽带总降噪 ~7 dB（本机已验证）。
+
+### 验收（M2）
+
+- [x] 实时谐波消除引擎收敛：纯谐波稳态降噪 ≥ 12 dB，打印机噪声 ≥ 4 dB（`tests/test_live.py`）。
+- [x] 合成模式全流程跑通（基线→估计 f0→实时消除→A/B 报告）。
+- [ ] 现场真机：误差麦处 ANC on vs off 音调成分 dB 差 ≥ 10 dB 视为 Demo 成功。
+- [ ] 现场排查项：设备选择（`--list`）、输出增益（啸叫）、基频自动估计失败时 `--f0` 手动指定。
 
 ## 验收
 

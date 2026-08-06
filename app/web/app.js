@@ -484,9 +484,159 @@ $("reset-map").addEventListener("click", () => {
   drawMap();
 });
 
+// ---------- ANC 实时降噪 ----------
+const ANC_POLL_MS = 1000;
+const ancTrend = $("anc-trend");
+const ancTrendCtx = ancTrend.getContext("2d");
+let ancHistory = [];       // 实时 SPL 曲线
+let ancReportShown = false;
+
+async function loadAudioDevices() {
+  try {
+    const res = await fetch("/api/audio/devices");
+    const r = await res.json();
+    if (!r.devices) return;
+    for (const kind of ["in", "out"]) {
+      const sel = kind === "in" ? $("anc-in-device") : $("anc-out-device");
+      sel.innerHTML = '<option value="">默认</option>';
+      for (const d of r.devices) {
+        const ch = kind === "in" ? d.in_channels : d.out_channels;
+        if (ch < 1) continue;
+        const opt = document.createElement("option");
+        opt.value = d.name;
+        opt.textContent = `${d.name} [${d.index}] (${ch}ch @${d.default_samplerate}Hz)`;
+        sel.appendChild(opt);
+      }
+    }
+  } catch { /* 设备列表不可用则忽略 */ }
+}
+
+function setAncButton(disabled, text) {
+  $("anc-start").disabled = disabled;
+  $("anc-start").textContent = text;
+}
+
+function ancPhaseText(p) {
+  return { idle: "空闲", baseline: "采集中（ANC off）", cancelling: "降噪中（ANC on）", done: "完成", error: "错误" }[p] || p;
+}
+
+function renderAncReport(r) {
+  const body = $("anc-report-body");
+  if (!r.found) {
+    body.innerHTML = "<p>暂无完整报告。</p>";
+    return;
+  }
+  let peaks = "";
+  if (r.peak_reductions && r.peak_reductions.length) {
+    peaks = r.peak_reductions.map(p =>
+      `<div class="row"><span>${p.freq.toFixed(0)} Hz</span><strong>${p.reduction_db.toFixed(1)} dB 降低</strong></div>`
+    ).join("");
+  }
+  body.innerHTML = `
+    <div class="row"><span>基频 f0</span><strong>${r.f0_hz ? r.f0_hz.toFixed(1) + " Hz" : "—"}</strong></div>
+    <div class="row"><span>基线 SPL</span><strong>${r.baseline_spl_db ?? "—"} dB</strong></div>
+    <div class="row"><span>降噪后 SPL</span><strong>${r.cancelling_spl_db ?? "—"} dB</strong></div>
+    <div class="row"><span>宽带降噪</span><strong class="good">${r.broadband_reduction_db.toFixed(1)} dB</strong></div>
+    <div class="row"><span>A 加权降噪</span><strong class="good">${r.a_weighted_reduction_db.toFixed(1)} dB</strong></div>
+    ${peaks ? `<div class="row"><span>音调峰值</span></div>${peaks}` : ""}
+  `;
+  $("anc-report").classList.remove("hidden");
+  ancReportShown = true;
+}
+
+async function pollAnc() {
+  try {
+    const res = await fetch("/api/anc/live/status");
+    const st = await res.json();
+    $("anc-state").textContent = st.state === "idle" ? "空闲" : st.state;
+    $("anc-phase").textContent = ancPhaseText(st.phase);
+    $("anc-f0-now").textContent = st.f0 ? st.f0.toFixed(1) + " Hz" : "—";
+    $("anc-base-db").textContent = st.baseline_spl_db ?? "—";
+    $("anc-now-db").textContent = st.spl_now_db ?? "—";
+    const red = st.reduction_db;
+    $("anc-reduction").textContent = red != null ? red.toFixed(1) + " dB" : "—";
+    if (st.error) $("anc-state").textContent = "错误";
+
+    if (st.phase === "cancelling") {
+      setAncButton(true, "降噪中…");
+      if (st.spl_now_db != null) {
+        ancHistory.push({ t: st.elapsed_s, v: st.spl_now_db });
+        if (ancHistory.length > 180) ancHistory = ancHistory.slice(-180);
+        drawAncTrend();
+      }
+      $("anc-report").classList.add("hidden");
+      ancReportShown = false;
+    } else if (st.phase === "done" && !ancReportShown) {
+      setAncButton(false, "开始 ANC");
+      const rep = await (await fetch("/api/anc/live/report")).json();
+      renderAncReport(rep);
+    } else if (st.state === "idle" || st.state === "error") {
+      setAncButton(false, "开始 ANC");
+    }
+  } catch { /* 轮询失败忽略 */ }
+}
+
+function drawAncTrend() {
+  const ctx = ancTrendCtx, c = ancTrend;
+  ctx.clearRect(0, 0, c.width, c.height);
+  if (ancHistory.length < 2) return;
+  const pad = 8, w = c.width - 2 * pad, h = c.height - 2 * pad;
+  const vs = ancHistory.map(p => p.v);
+  const lo = Math.floor(Math.min(...vs) / 5) * 5;
+  const hi = Math.ceil(Math.max(...vs) / 5) * 5;
+  const span = Math.max(hi - lo, 5);
+  ctx.strokeStyle = "#7dd3fc";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ancHistory.forEach((p, i) => {
+    const x = pad + (i / (ancHistory.length - 1)) * w;
+    const y = pad + (1 - (p.v - lo) / span) * h;
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  });
+  ctx.stroke();
+  ctx.fillStyle = "rgba(148,163,184,.7)";
+  ctx.font = "11px sans-serif";
+  ctx.fillText(`${lo} dB`, 4, h + pad);
+  ctx.fillText(`${hi} dB`, 4, 12);
+}
+
+$("anc-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  setAncButton(true, "启动中…");
+  ancHistory = [];
+  drawAncTrend();
+  const body = {
+    synthetic: $("anc-synthetic").checked,
+    in_device: $("anc-in-device").value || null,
+    out_device: $("anc-out-device").value || null,
+    f0: parseFloat($("anc-f0").value) || null,
+    gain: parseFloat($("anc-gain").value) || 0.4,
+    baseline_s: parseFloat($("anc-baseline").value) || 5,
+    duration_s: parseFloat($("anc-duration").value) || 60,
+  };
+  const res = await fetch("/api/anc/live/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const r = await res.json();
+  if (!r.started) {
+    setAncButton(false, "开始 ANC");
+    $("anc-state").textContent = r.message || "启动失败";
+  }
+});
+
+$("anc-stop").addEventListener("click", async () => {
+  await fetch("/api/anc/live/stop", { method: "POST" });
+  setAncButton(false, "开始 ANC");
+});
+
 // ---------- 启动 ----------
 $("grid-form").addEventListener("submit", startGrid);
 pollLive();
 setInterval(pollLive, LIVE_MS);
 pollGrid();  // 恢复已完成的网格测量结果（刷新页面后）
+loadAudioDevices();
+pollAnc();
+setInterval(pollAnc, ANC_POLL_MS);
 drawMap();
