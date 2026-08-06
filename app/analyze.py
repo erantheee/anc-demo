@@ -127,6 +127,39 @@ def band_energy_db(samples: np.ndarray, fs: float) -> dict[str, float]:
     return out
 
 
+def stable_segment(samples: np.ndarray, fs: float, frame_s: float = 0.25,
+                   keep_ratio: float = 0.8, max_jump_db: float = 20.0) -> np.ndarray:
+    """剔除瞬态/突发噪声，返回稳定段。
+
+    把信号分帧算 RMS，剔除显著高于中位数的帧（瞬态污染，如开关门、
+    说话、碰触），保留约 keep_ratio 的稳定部分。用于真实测量时避免
+    突发噪声抬高 SPL 或污染频谱。
+    """
+    x = np.asarray(samples, dtype=np.float64)
+    if x.ndim > 1:
+        x = x.mean(axis=1)
+    if len(x) == 0:
+        return x
+    frame = max(int(fs * frame_s), 1)
+    n_frames = len(x) // frame
+    if n_frames < 2:
+        return x
+    fr = x[: n_frames * frame].reshape(n_frames, frame)
+    rms = np.sqrt(np.mean(fr ** 2, axis=1))
+    med = np.median(rms)
+    thresh = med * (10.0 ** (max_jump_db / 20.0))
+    keep = rms <= thresh
+    n_keep = int(np.sum(keep))
+    if n_keep == 0:
+        return x  # 全异常时放弃剔除
+    target = min(n_keep, max(int(n_frames * keep_ratio), 1))
+    keep_idx = np.argsort(rms)[:target]  # 保留最低 RMS 的 target 帧
+    keep_mask = np.zeros(n_frames, dtype=bool)
+    keep_mask[keep_idx] = True
+    kept = fr[keep_mask].ravel()
+    return kept.astype(np.float64)
+
+
 def analyze(samples: np.ndarray, fs: float, calibration_offset_db: float = 0.0) -> AnalysisReport:
     x = np.asarray(samples, dtype=np.float64)
     if x.ndim > 1:

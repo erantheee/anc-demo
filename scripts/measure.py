@@ -22,10 +22,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 
 from app import capture
-from app.analyze import AnalysisReport, analyze, analyze_file
+from app.analyze import AnalysisReport, analyze, analyze_file, stable_segment
 from app.noise_map import GridPoint, build_noise_map, write_report
 from app.source_id import load_profiles, match_sources, recommend_anc
 from app.synth import printer_noise
+
+
+def _read_wav(path: str) -> tuple[np.ndarray, int]:
+    """读取 WAV，返回 (samples_float64_mono, fs)。兼容 int16 与 float 格式。"""
+    from scipy.io import wavfile
+
+    fs, data = wavfile.read(path)
+    if data.dtype == np.int16:
+        samples = data.astype(np.float64) / 32768.0
+    elif data.dtype in (np.float32, np.float64):
+        samples = data.astype(np.float64)
+    else:
+        samples = data.astype(np.float64) / np.iinfo(data.dtype).max
+    if samples.ndim > 1:
+        samples = samples.mean(axis=1)
+    return samples, int(fs)
 
 
 def parse_grid(s: str) -> list[tuple[float, float]]:
@@ -66,6 +82,7 @@ def main() -> None:
             dist = np.hypot(x, y)
             samples, _ = printer_noise(fs=args.fs, duration=args.duration, seed=i)
             samples = samples * float(np.clip(1.0 - 0.08 * dist, 0.3, 1.0))
+            report = analyze(samples, args.fs, offset)
         else:
             if args.driver == "arecord":
                 wav = capture.record_with_arecord(
@@ -73,9 +90,13 @@ def main() -> None:
             else:
                 wav = capture.record(
                     args.duration, fs=args.fs, out_path=Path("data/recordings") / f"p{i}.wav")
-            samples = np.zeros(0)  # analyze_file 内部读取
-
-        report = analyze_file(str(wav), offset) if not args.synthetic else analyze(samples, args.fs, offset)
+            samples, fs_read = _read_wav(str(wav))
+            # 真实录音可能含瞬态突发（开关门/说话/碰触），只保留稳定段
+            samples = stable_segment(samples, fs_read)
+            if len(samples) == 0:
+                print(f"  [警告] 点 ({x},{y}) 无有效信号，跳过")
+                continue
+            report = analyze(samples, fs_read, offset)
         hits = match_sources(report, profiles)
         spl = report.spl_db if report.spl_db is not None else report.rms_db
         points.append(GridPoint(x=x, y=y, spl_db=float(spl),

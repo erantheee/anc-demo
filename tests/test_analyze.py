@@ -1,7 +1,7 @@
 import numpy as np
 
 from app.analyze import (a_weight_db, analyze, find_harmonic_family, find_peaks,
-                         rms_db, spectrum_db, tonality_ratio)
+                         rms_db, spectrum_db, stable_segment, tonality_ratio)
 from app.synth import printer_noise
 
 
@@ -56,3 +56,19 @@ def test_tonality_ratio_bounds():
     x = rng.standard_normal(16000)
     report = analyze(x, 16000)
     assert 0.0 <= report.tonality_ratio <= 1.0
+
+
+def test_stable_segment_removes_transient():
+    fs = 16000
+    x = 0.05 * np.sin(2 * np.pi * 200 * np.arange(fs) / fs)
+    x[fs // 2: fs // 2 + fs // 4] += 5.0  # 瞬态突发（高 40 dB）
+    kept = stable_segment(x, fs)
+    rms_kept = np.sqrt(np.mean(kept ** 2))
+    assert rms_kept < 0.15, f"瞬态应被剔除，RMS={rms_kept:.3f}"
+
+
+def test_stable_segment_keeps_clean_signal():
+    fs = 16000
+    x = 0.05 * np.sin(2 * np.pi * 200 * np.arange(fs) / fs)
+    kept = stable_segment(x, fs)
+    assert len(kept) > len(x) * 0.7
