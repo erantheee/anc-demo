@@ -238,8 +238,8 @@ class LiveANCEngine:
                     outdata[:, 0] = -canceller.output_gain * np.tanh(y)
 
         stream = sd.Stream(samplerate=self.fs, blocksize=self.block, channels=1,
-                           callback=cb, input_device=self.in_device,
-                           output_device=self.out_device, dtype="float32")
+                           callback=cb, device=(self.in_device, self.out_device),
+                           dtype="float32")
         with stream:
             while not self._stop.is_set():
                 with self._lock:
