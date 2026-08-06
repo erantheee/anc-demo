@@ -59,11 +59,16 @@ def main() -> None:
     kept = stable_segment(recorded, args.fs)
     report = analyze(kept, args.fs)
     print(f"[2/4] 采集 {len(kept)/args.fs:.1f}s 有效信号，RMS {report.rms_db:.1f} dBFS")
+    if report.rms_db < -40.0:
+        print("      [警告] 采集信号很弱——扬声器未接、音量过低或采集被占用。"
+              "请检查扬声器连接后重试。")
     # 基频从参考信号（播放的噪声）估计：信噪比高，不受房间底噪影响，
     # 对应真实系统中"参考麦克风贴噪声源"的做法
     f0 = estimate_fundamental(noise, args.fs, low=40, high=300)
+    dom = report.dominant_freq
     print(f"      参考信号基频 {f0:.1f} Hz，采集音调占比 {report.tonality_ratio:.2f}，"
-          f"主频 {report.dominant_freq:.0f} Hz")
+          f"主频 {dom:.0f} Hz" if dom else
+          f"      参考信号基频 {f0:.1f} Hz，采集音调占比 {report.tonality_ratio:.2f}")
 
     # 3. 降噪处理
     print("[3/4] 运行谐波消除与 FXLMS ...")
