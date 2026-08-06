@@ -1,0 +1,13 @@
+{
+  "id": "3d_printer",
+  "name": "3D 打印机",
+  "noise_type": "tonal + wideband",
+  "signatures": [
+    { "kind": "harmonic_family", "low_hz": 60, "high_hz": 500, "n_harmonics_min": 3 },
+    { "kind": "band_peak", "low_hz": 1800, "high_hz": 4500 },
+    { "kind": "band_energy_dominant", "band": "low" }
+  ],
+  "reference_mic": "打印机机架旁 10–20 cm",
+  "anc_feasibility": { "tonal": "high", "wideband": "medium" },
+  "notes": "步进电机音调与风扇叶片频率是 ANC 甜点；高频宽带（气动噪声）需被动方案。静音区建议在操作位。"
+}

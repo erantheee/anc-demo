@@ -1,0 +1,14 @@
+{
+  "id": "vacuum_door",
+  "name": "门外扫地机器人",
+  "noise_type": "tonal (电机) + 结构传导",
+  "signatures": [
+    { "kind": "harmonic_family", "low_hz": 80, "high_hz": 600, "n_harmonics_min": 2 }
+  ],
+  "reference_mic": "门上/墙边，靠近结构传导路径",
+  "anc_feasibility": { "tonal": "medium", "wideband": "low" },
+  "negative_signatures": [
+    { "kind": "band_peak", "low_hz": 1500, "high_hz": 6000 }
+  ],
+  "notes": "声源在门外移动，参考信号延迟敏感；优先处理电机音调经门/墙传导的低频成分，静音区设在人耳位置。"
+}

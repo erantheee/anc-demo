@@ -1,0 +1,12 @@
+{
+  "id": "fan",
+  "name": "风机",
+  "noise_type": "tonal (叶片频率) + wideband",
+  "signatures": [
+    { "kind": "harmonic_family", "low_hz": 80, "high_hz": 800, "n_harmonics_min": 2 },
+    { "kind": "band_peak", "low_hz": 1000, "high_hz": 6000 }
+  ],
+  "reference_mic": "风机进风口侧 10–30 cm",
+  "anc_feasibility": { "tonal": "high", "wideband": "medium" },
+  "notes": "叶片通过频率（BPF）及谐波是典型周期成分，谐波消除效果好；参考信号需与叶片转速强相干。"
+}

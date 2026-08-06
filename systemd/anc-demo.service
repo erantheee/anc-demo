@@ -1,0 +1,14 @@
+[Unit]
+Description=Pi ANC Demo API
+After=network.target sound.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/raspberry-pi-anc-demo
+ExecStart=/home/pi/raspberry-pi-anc-demo/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=3
+User=pi
+
+[Install]
+WantedBy=multi-user.target

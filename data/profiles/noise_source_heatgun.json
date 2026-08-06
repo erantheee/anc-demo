@@ -1,0 +1,15 @@
+{
+  "id": "heatgun",
+  "name": "硬件工程师风枪",
+  "noise_type": "wideband 强噪声、间歇",
+  "signatures": [
+    { "kind": "band_energy_dominant", "band": "mid" },
+    { "kind": "band_peak", "low_hz": 1000, "high_hz": 6000 }
+  ],
+  "reference_mic": "风枪喷嘴旁 20 cm（注意防热距离），间歇触发时启动",
+  "anc_feasibility": { "tonal": "low", "wideband": "low" },
+  "negative_signatures": [
+    { "kind": "harmonic_family", "low_hz": 40, "high_hz": 1000, "n_harmonics_min": 3 }
+  ],
+  "notes": "宽带强噪声 ANC 收益有限，建议先测 SPL 确认是否超过需求阈值；高 SPL 场景注意麦克风削波与扬声器功率。"
+}

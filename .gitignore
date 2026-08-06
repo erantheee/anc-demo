@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+data/recordings/*.wav
+data/recordings/*.flac
+data/reports/*.json
+*.log

@@ -1,0 +1,43 @@
+[project]
+name = "pi-anc-demo"
+version = "0.1.0"
+description = "开放式主动降噪（ANC）硬件 Demo：树莓派 5 + 摄像头空间建模 + 3D 打印机噪声测量与降噪"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+# 录音/播放：USB 麦克风、I2S 编解码器（WM8960 等）
+audio = [
+    "sounddevice>=0.4.6",
+    "soundfile>=0.12",
+]
+# 摄像头定位（ArUco / OpenCV）
+vision = [
+    "opencv-python>=4.8",
+]
+# 噪声地图可视化
+plot = [
+    "matplotlib>=3.7",
+]
+# Web UI / API
+web = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+anc-measure = "scripts.measure:main"
+anc-calibrate = "scripts.calibrate_mic:main"
+anc-run = "scripts.run_anc:main"
+
+[tool.setuptools.packages.find]
+include = ["app*", "scripts*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

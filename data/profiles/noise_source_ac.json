@@ -1,0 +1,15 @@
+{
+  "id": "ac",
+  "name": "空调",
+  "noise_type": "tonal (低频谐波) + 宽带",
+  "signatures": [
+    { "kind": "harmonic_family", "low_hz": 40, "high_hz": 250, "n_harmonics_min": 2 },
+    { "kind": "band_energy_dominant", "band": "low" }
+  ],
+  "reference_mic": "空调面板/出风口附近，避开气流直吹",
+  "anc_feasibility": { "tonal": "high", "wideband": "medium" },
+  "negative_signatures": [
+    { "kind": "band_peak", "low_hz": 1500, "high_hz": 6000 }
+  ],
+  "notes": "压缩机 50/60 Hz 及谐波是 ANC 高收益目标；低频安静区大（数十 cm）。"
+}
