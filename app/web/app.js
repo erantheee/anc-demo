@@ -610,7 +610,7 @@ $("anc-form").addEventListener("submit", async (ev) => {
     in_device: $("anc-in-device").value || null,
     out_device: $("anc-out-device").value || null,
     f0: parseFloat($("anc-f0").value) || null,
-    gain: parseFloat($("anc-gain").value) || 0.4,
+    gain: parseFloat($("anc-gain").value) || 0.08,
     baseline_s: parseFloat($("anc-baseline").value) || 5,
     duration_s: parseFloat($("anc-duration").value) || 60,
   };

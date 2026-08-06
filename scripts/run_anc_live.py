@@ -73,7 +73,8 @@ def main() -> None:
     ap.add_argument("--duration", type=float, default=60.0, help="总演示时长（秒），默认 60")
     ap.add_argument("--f0", type=float, default=None, help="手动指定基频（Hz），跳过自动估计")
     ap.add_argument("--harmonics", type=int, default=10, help="谐波数量，默认 10")
-    ap.add_argument("--gain", type=float, default=0.4, help="反相输出增益（防啸叫，默认 0.4）")
+    ap.add_argument("--gain", type=float, default=0.08,
+                    help="反相输出增益（防啸叫，默认 0.08）")
     ap.add_argument("--mu", type=float, default=0.02,
                     help="NLMS 步长，默认 0.02（block 归一化后）")
     ap.add_argument("--echo-gain", type=float, default=0.0,

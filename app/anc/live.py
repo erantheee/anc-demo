@@ -7,6 +7,8 @@ M2 现场 demo 的核心：用一支误差麦克风（USB 麦）采噪声，在�
 - `BlockHarmonicCanceller`：向量化 block 处理（替代逐样本 step，48 kHz 实时可跑）。
 - `LiveANCEngine`：sounddevice 双工流线程，分两段采集（ANC off 基线 / ANC on 残差），
   线程安全 `status()` 供仪表盘轮询；`synthetic=True` 时无硬件自测。
+- 防啸叫：低输出增益 + tanh + 硬限幅 + 输出/输入 RMS 比例门控 + 权重范数上限 +
+  xrun 时丢弃 block 仅推进相位游标（避免把错乱时序喂给 NLMS）。
 """
 from __future__ import annotations
 
@@ -24,13 +26,15 @@ class BlockHarmonicCanceller:
     """向量化自适应谐波消除。每个谐波一组 cos/sin 权重，block NLMS 更新。"""
 
     def __init__(self, fs: float, f0: float, max_harmonics: int = 10,
-                 mu: float = 1e-3, block: int = 512, output_gain: float = 0.4):
+                 mu: float = 1e-3, block: int = 512, output_gain: float = 0.08,
+                 max_weight_norm: float = 5.0):
         self.fs = float(fs)
         self.f0 = float(f0)
         self.max_harmonics = int(max_harmonics)
         self.mu = float(mu)
         self.block = int(block)
         self.output_gain = float(output_gain)
+        self.max_weight_norm = float(max_weight_norm)
         self.w = np.zeros(2 * self.max_harmonics)
         self._n = 0  # 采样点游标（秒 = n/fs）
         self._basis = self._build_basis()
@@ -45,6 +49,10 @@ class BlockHarmonicCanceller:
         self._n += self.block
         return basis
 
+    def skip_block(self) -> None:
+        """不更新权重，仅推进相位游标（xrun 丢 block 时保持与音频时钟对齐）。"""
+        self._basis = self._build_basis()
+
     def process_block(self, desired: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """desired: [block] 误差麦 block。返回 (y_block, e_block)。"""
         X = self._basis
@@ -57,8 +65,31 @@ class BlockHarmonicCanceller:
         power = np.sum(X ** 2, axis=0)
         grad = X.T @ e
         self.w = self.w + self.mu * grad / (power + 1e-10)
+        # 权重范数上限：相位失步 / 回声正反馈时权重会发散，超过则按比例缩回
+        n = float(np.linalg.norm(self.w))
+        if n > self.max_weight_norm:
+            self.w *= self.max_weight_norm / n
         self._basis = self._build_basis()
         return y, e
+
+
+def compute_safe_output(y: np.ndarray, in_rms: float, gain: float,
+                        clip_level: float = 0.12, ratio: float = 4.0,
+                        quiet_rms: float = 1e-3) -> np.ndarray:
+    """反相输出防啸叫整形。
+
+    - 输入能量极低（安静）时输出静音，避免向安静环境喷出自身噪声。
+    - tanh 压缩后硬限幅到 ±clip_level：即使权重发散也不能把扬声器炸响。
+    - 输出 RMS 不得超过 ratio × 输入 RMS（正反馈自激时按比例缩回）。
+    """
+    if in_rms < quiet_rms:
+        return np.zeros_like(y)
+    out = np.clip(-gain * np.tanh(y), -clip_level, clip_level)
+    out_rms = float(np.sqrt(np.mean(out ** 2)))
+    max_allowed = ratio * max(in_rms, 1e-12)
+    if out_rms > max_allowed:
+        out *= max_allowed / out_rms
+    return out
 
 
 @dataclass
@@ -66,7 +97,7 @@ class LiveState:
     state: str = "idle"  # idle | running | stopping | stopped | error
     phase: str = "idle"  # idle | baseline | cancelling | done
     f0: float | None = None
-    gain: float = 0.4
+    gain: float = 0.08
     spl_now_db: float | None = None
     baseline_spl_db: float | None = None
     cancelling_spl_db: float | None = None
@@ -80,7 +111,7 @@ class LiveANCEngine:
 
     def __init__(self, fs: int = 48000, in_device=None, out_device=None,
                  block: int = 512, f0: float | None = None, max_harmonics: int = 10,
-                 mu: float = 2e-2, output_gain: float = 0.4, baseline_s: float = 5.0,
+                 mu: float = 2e-2, output_gain: float = 0.08, baseline_s: float = 5.0,
                  max_duration_s: float = 60.0, synthetic: bool = False,
                  echo_gain: float = 0.0) -> None:
         self.fs = int(fs)
@@ -179,7 +210,9 @@ class LiveANCEngine:
         d = np.concatenate(buf)
         with self._lock:
             self.state.baseline_spl_db = rms_db(d)
-        f0 = self.f0_init or estimate_fundamental(d, self.fs)
+        # 只用尾部 ~1s 估基频：自相关是 O(n²)，整段 3s/48k 会阻塞主循环数秒
+        tail = d[-int(self.fs):] if len(d) >= self.fs else d
+        f0 = self.f0_init or estimate_fundamental(tail, self.fs)
         with self._lock:
             if f0 is None:
                 self.state.state = "error"
@@ -220,6 +253,13 @@ class LiveANCEngine:
                 if self.state.state != "running":
                     return
                 phase = self.state.phase
+            # xrun（欠载/溢出）：丢弃该 block，仅推进相位游标，避免把错乱时序喂给 NLMS
+            if status and (status.input_underflow or status.output_underflow
+                           or status.input_overflow or status.output_overflow):
+                with self._lock:
+                    if self._canceller is not None:
+                        self._canceller.skip_block()
+                return
             d = indata[:, 0]
             if phase == "baseline":
                 with self._lock:
@@ -231,11 +271,13 @@ class LiveANCEngine:
                 canceller = self._canceller
                 if canceller is not None:
                     y, e = canceller.process_block(d)
+                    in_rms = float(np.sqrt(np.mean(d ** 2)))
+                    outdata[:, 0] = compute_safe_output(
+                        y, in_rms, canceller.output_gain)
                     with self._lock:
                         self.e_buf.append(e.copy())
                         self.state.spl_now_db = rms_db(e)
                         self.state.elapsed_s = time.time() - self._start_ts
-                    outdata[:, 0] = -canceller.output_gain * np.tanh(y)
 
         stream = sd.Stream(samplerate=self.fs, blocksize=self.block, channels=1,
                            callback=cb, device=(self.in_device, self.out_device),
@@ -283,9 +325,11 @@ class LiveANCEngine:
                 desired = blk + echo
                 y, e = canceller.process_block(desired)
                 self.e_buf.append(e.copy())
-                # 记录输出用于回声（压缩一下避免过冲）
+                # 记录输出用于回声（同样走防啸叫整形）
+                in_rms = float(np.sqrt(np.mean(desired ** 2)))
+                out = compute_safe_output(y, in_rms, canceller.output_gain)
                 y_hist = np.roll(y_hist, self.block)
-                y_hist[: self.block] = -canceller.output_gain * np.tanh(y)
+                y_hist[: self.block] = out
             with self._lock:
                 self.state.elapsed_s = idx / self.fs
                 if self.e_buf:

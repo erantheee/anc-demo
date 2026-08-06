@@ -3,7 +3,8 @@ import time
 import numpy as np
 
 from app.anc.harmonic import estimate_fundamental
-from app.anc.live import BlockHarmonicCanceller, LiveANCEngine
+from app.anc.live import (BlockHarmonicCanceller, LiveANCEngine,
+                          compute_safe_output)
 from app.synth import printer_noise
 
 
@@ -82,3 +83,55 @@ def test_live_engine_synthetic_full_loop():
     assert st["f0"] is not None and 100 <= st["f0"] <= 140, st["f0"]
     assert st["baseline_spl_db"] is not None and st["cancelling_spl_db"] is not None
     assert st["reduction_db"] is not None and st["reduction_db"] < -4.0, st
+
+
+def test_weight_norm_stays_bounded_under_echo_feedback():
+    """回归：声学正反馈（输出被误差麦再次采到）不能使权重发散。
+
+    用高回声增益（0.9）把扬声器输出送回输入，模拟自激条件；权重范数必须
+    被限制在 max_weight_norm 内，且输出 RMS 保持很小。
+    """
+    fs = 48000
+    c = BlockHarmonicCanceller(fs=fs, f0=120.0, block=512, mu=0.05,
+                               max_harmonics=10, output_gain=0.2,
+                               max_weight_norm=5.0)
+    rng = np.random.default_rng(0)
+    noise, _ = printer_noise(fs=fs, duration=2.0, seed=1)
+    noise = noise.astype(np.float64)
+    y_hist = np.zeros(c.block)
+    idx = 0
+    max_out = 0.0
+    max_norm = 0.0
+    while idx + c.block <= len(noise):
+        # 误差麦采到：参考噪声 + 0.9×扬声器回声（正反馈）
+        blk = noise[idx:idx + c.block] + 0.9 * y_hist
+        y, _ = c.process_block(blk)
+        in_rms = float(np.sqrt(np.mean(blk ** 2)))
+        out = compute_safe_output(y, in_rms, c.output_gain)
+        max_out = max(max_out, float(np.max(np.abs(out))))
+        max_norm = max(max_norm, float(np.linalg.norm(c.w)))
+        y_hist = np.roll(y_hist, c.block)
+        y_hist[:c.block] = out
+        idx += c.block
+    assert max_norm <= 5.0 + 1e-6, f"权重范数应被限制在 5.0 内，实际 {max_norm:.2f}"
+    assert max_out <= 0.12 + 1e-9, f"输出不得超过硬限幅 0.12，实际 {max_out:.3f}"
+
+
+def test_output_hard_clipped_even_with_large_weights():
+    """回归：即使权重巨大（模拟发散），输出也不能超过限幅电平。"""
+    c = BlockHarmonicCanceller(fs=48000, f0=120.0, block=512, max_harmonics=10)
+    c.w = np.full(2 * c.max_harmonics, 10.0)  # 巨大权重
+    blk = np.ones(c.block) * 0.5
+    y, _ = c.process_block(blk)
+    in_rms = float(np.sqrt(np.mean(blk ** 2)))
+    out = compute_safe_output(y, in_rms, c.output_gain)
+    assert float(np.max(np.abs(out))) <= 0.12 + 1e-9
+    # 权重范数上限也应生效：10.0 的初始权重会被缩回
+    assert float(np.linalg.norm(c.w)) <= 5.0 + 1e-6
+
+
+def test_safe_output_quiet_silence():
+    """安静环境（输入能量极低）时输出静音，不喷出自身噪声。"""
+    y = np.ones(512) * 5.0  # 即使 y 很大，输入安静也要静音
+    out = compute_safe_output(y, in_rms=1e-6, gain=0.2)
+    assert np.all(out == 0.0)
