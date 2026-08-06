@@ -82,6 +82,15 @@ def main() -> None:
     harm_report = analyze(harm_res["e"], args.fs)
     fx_report = analyze(fx_res["e"], args.fs)
 
+    # 谐波峰值衰减：评估谐波消除在音调成分上的效果（即使整体 RMS 降幅被宽带掩盖）
+    def tonal_peak_db(report) -> float:
+        f0_pk = next((p.level_db for p in report.peaks if p.harmonic_order == 1), None)
+        return f0_pk if f0_pk is not None else -120.0
+
+    before_f0 = tonal_peak_db(report)
+    after_f0_harm = tonal_peak_db(harm_report)
+    after_f0_fx = tonal_peak_db(fx_report)
+
     result = {
         "setup": {"fs": args.fs, "duration": args.duration, "volume": args.volume,
                   "recorded_dbfs": round(report.rms_db, 1)},
@@ -94,10 +103,12 @@ def main() -> None:
         "harmonic": {
             "reduction_db": round(harm_res["reduction_db"], 2),
             "residual_tonality": round(harm_report.tonality_ratio, 3),
+            "f0_peak_reduction_db": round(before_f0 - after_f0_harm, 1),
         },
         "fxlms": {
             "reduction_db": round(fx_res["reduction_db"], 2),
             "residual_tonality": round(fx_report.tonality_ratio, 3),
+            "f0_peak_reduction_db": round(before_f0 - after_f0_fx, 1),
         },
     }
 
@@ -106,10 +117,14 @@ def main() -> None:
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print("\n=== 结果 ===")
-    print(f"采集噪声 RMS:        {report.rms_db:+.1f} dBFS")
-    print(f"谐波消除降噪:        {harm_res['reduction_db']:+.2f} dB")
-    print(f"FXLMS 降噪:          {fx_res['reduction_db']:+.2f} dB")
+    print(f"采集噪声 RMS:          {report.rms_db:+.1f} dBFS（音调占比 {report.tonality_ratio:.2f}）")
+    print(f"谐波消除: 整体 {harm_res['reduction_db']:+.2f} dB，"
+          f"基频峰值 {before_f0 - after_f0_harm:+.1f} dB")
+    print(f"FXLMS:    整体 {fx_res['reduction_db']:+.2f} dB，"
+          f"基频峰值 {before_f0 - after_f0_fx:+.1f} dB")
     print(f"结果保存: {out_dir / 'anc-demo-result.json'}")
+    print("\n注：若谐波消除整体降幅小但基频峰值大幅下降，说明扬声器对低频")
+    print("输出弱、采集端音调能量低——算法在工作，硬件低频响应是瓶颈。")
 
 
 if __name__ == "__main__":
