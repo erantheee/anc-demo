@@ -14,10 +14,14 @@ def list_devices() -> list[dict]:
         return []
 
 
-def record(duration: float, fs: int = 16000, channels: int = 1,
+def record(duration: float, fs: int = 48000, channels: int = 2,
            device: str | int | None = None,
            out_path: str | Path | None = None) -> Path:
-    """用 sounddevice 录音到 WAV。返回输出文件路径。"""
+    """用 sounddevice 录音到 WAV。返回输出文件路径。
+
+    默认 48kHz 双声道（常见 USB 麦克风/声卡）。多声道录音会写多声道 WAV，
+    分析阶段统一取均值降为单声道。
+    """
     try:
         import sounddevice as sd
         import soundfile as sf
