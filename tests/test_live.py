@@ -135,3 +135,135 @@ def test_safe_output_quiet_silence():
     y = np.ones(512) * 5.0  # 即使 y 很大，输入安静也要静音
     out = compute_safe_output(y, in_rms=1e-6, gain=0.2)
     assert np.all(out == 0.0)
+
+
+# ---- 扬声器→误差麦延迟补偿（次级路径对齐） ----
+
+def _fan_like_noise(fs: float, duration: float, f0: float = 140.6) -> np.ndarray:
+    """仿风扇：基频 140.6Hz + 前三次谐波。"""
+    t = np.arange(int(duration * fs)) / fs
+    return (0.08 * np.sin(2 * np.pi * f0 * t)
+            + 0.05 * np.sin(2 * np.pi * 2 * f0 * t)
+            + 0.03 * np.sin(2 * np.pi * 3 * f0 * t))
+
+
+def _simulate_delay_loop(noise: np.ndarray, fs: float, f0: float, delay_s: float,
+                         comp_s: float, echo_gain: float, output_gain: float = 1.0,
+                         block: int = 512, mu: float = 0.02,
+                         max_harmonics: int = 10) -> np.ndarray:
+    """模拟物理环路：误差麦听到 noise(t) + echo_gain·out(t-δ)（扬声器输出经 δ
+    到达误差麦），消除器对该信号实时输出反相波。返回误差麦处的物理残差
+    r(t) = noise(t) + echo_gain·out(t-δ)，即用户实际听到的降噪效果。
+    """
+    delay_samples = int(round(delay_s * fs))
+    c = BlockHarmonicCanceller(fs=fs, f0=f0, block=block, mu=mu,
+                               max_harmonics=max_harmonics,
+                               output_gain=output_gain,
+                               speaker_mic_delay_s=comp_s)
+    n = len(noise)
+    out_all = np.zeros(n)
+    idx = 0
+    while idx + block <= n:
+        d = noise[idx:idx + block].astype(np.float64).copy()
+        if delay_samples > 0 and idx >= delay_samples:
+            d += echo_gain * out_all[idx - delay_samples: idx - delay_samples + block]
+        y, e = c.process_block(d)
+        in_rms = float(np.sqrt(np.mean(d ** 2)))
+        out_all[idx:idx + block] = compute_safe_output(y, in_rms, c.output_gain)
+        idx += block
+    r_mic = noise.astype(np.float64).copy()
+    if delay_samples > 0:
+        r_mic[delay_samples:] += echo_gain * out_all[:n - delay_samples]
+    return r_mic
+
+
+def _rms(x: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(np.asarray(x, dtype=np.float64) ** 2)))
+
+
+def test_output_predicts_noise_forward_by_delay():
+    """机制：输出重建基必须"向前预测" δ，即 y_out(t) ≈ noise(t + δ)。
+
+    扬声器在时刻 t 播放的声音经 δ 秒才到达误差麦（时刻 t+δ），所以反相输出
+    必须对准噪声在 t+δ 的相位。该测试无反馈，直接验证预测方向/符号。
+    """
+    fs = 48000
+    f0 = 140.6
+    delay_s = 0.005
+    ds = int(round(delay_s * fs))
+    noise = _fan_like_noise(fs, duration=4.0, f0=f0)
+    c = BlockHarmonicCanceller(fs=fs, f0=f0, block=512, mu=0.02,
+                               max_harmonics=10, output_gain=0.08,
+                               speaker_mic_delay_s=delay_s)
+    ys = []
+    idx = 0
+    while idx + c.block <= len(noise):
+        y, _ = c.process_block(noise[idx:idx + c.block])
+        ys.append(y)
+        idx += c.block
+    y_out = np.concatenate(ys)
+
+    skip = int(1.0 * fs)
+    seg_y = y_out[skip: -ds]
+    seg_fwd = noise[skip + ds: skip + ds + len(seg_y)]
+    seg_now = noise[skip: skip + len(seg_y)]
+    base = _rms(noise[skip: skip + len(seg_y)])
+    # y_out 应对准"未来"的噪声（同相预测），而不是当前噪声或取反
+    assert _rms(seg_y - seg_fwd) / base < 1e-1, "y_out 未向前预测 delay"
+    assert _rms(seg_y - seg_now) / base > 0.3, "y_out 不应停留在当前相位（未补偿）"
+    assert _rms(-seg_y - seg_fwd) / base > 0.3, "y_out 符号方向错误"
+
+
+def test_delay_compensation_reduces_mic_residual():
+    """闭环：已知扬声器→麦延迟 δ 时，开启 δ 补偿后误差麦残差显著低于不补偿。
+
+    模拟真实物理环路（扬声器输出经 δ 延迟被误差麦回采），比较误差麦处残差：
+    不补偿时反相波到达误差麦时已与噪声错位 → 残差不降反升；补偿 δ 后对准 →
+    残差显著下降（至少 3-6 dB，实测 δ=2ms、环路增益 0.6 时差 ~9 dB）。
+    """
+    fs = 48000
+    f0 = 140.6
+    delay_s = 0.002  # 2ms，麦克风靠近扬声器的量级
+    duration = 8.0
+    noise = _fan_like_noise(fs, duration=duration, f0=f0)
+    echo_gain, output_gain = 0.6, 1.0
+    skip = int(2.0 * fs)
+    base = _rms(noise[skip:])
+
+    r_yes = _simulate_delay_loop(noise, fs, f0, delay_s, delay_s,
+                                 echo_gain, output_gain)
+    r_no = _simulate_delay_loop(noise, fs, f0, delay_s, 0.0,
+                                echo_gain, output_gain)
+    r_wrong = _simulate_delay_loop(noise, fs, f0, delay_s, -delay_s,
+                                   echo_gain, output_gain)
+
+    red_yes = 20 * np.log10(_rms(r_yes[skip:]) / base)
+    red_no = 20 * np.log10(_rms(r_no[skip:]) / base)
+    red_wrong = 20 * np.log10(_rms(r_wrong[skip:]) / base)
+    assert red_yes < -3.0, f"补偿后应真正降噪，实际 {red_yes:.1f} dB"
+    assert red_yes < red_no - 3.0, \
+        f"延迟补偿应比不补偿至少好 3 dB：comp={red_yes:.1f} vs none={red_no:.1f}"
+    assert red_yes < red_wrong, \
+        f"延迟方向错误（向后预测）应更差：comp={red_yes:.1f} vs -δ={red_wrong:.1f}"
+
+
+def test_delay_compensation_optimum_at_true_delay():
+    """方向扫查：残差在补偿值≈真实延迟 δ 处最小（过大/过小/取反都更差）。"""
+    fs = 48000
+    f0 = 140.6
+    delay_s = 0.001  # 1ms
+    noise = _fan_like_noise(fs, duration=6.0, f0=f0)
+    echo_gain, output_gain = 1.0, 1.0
+    skip = int(2.0 * fs)
+    base = _rms(noise[skip:])
+
+    comps = [-delay_s, 0.0, 0.5 * delay_s, delay_s, 2 * delay_s]
+    reds = {}
+    for comp_s in comps:
+        r = _simulate_delay_loop(noise, fs, f0, delay_s, comp_s,
+                                 echo_gain, output_gain)
+        reds[comp_s] = 20 * np.log10(_rms(r[skip:]) / base)
+    best = min(reds, key=lambda k: reds[k])
+    assert best == delay_s, f"最优补偿应等于真实延迟 δ，实际最优在 {best*1000:.1f}ms: {reds}"
+    assert reds[delay_s] < reds[0.0] - 3.0
+    assert reds[delay_s] < reds[-delay_s] - 3.0

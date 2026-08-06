@@ -550,6 +550,7 @@ async function pollAnc() {
     const st = await res.json();
     $("anc-state").textContent = st.state === "idle" ? "空闲" : st.state;
     $("anc-phase").textContent = ancPhaseText(st.phase);
+    $("anc-mic-delay-now").textContent = st.mic_delay_ms != null ? st.mic_delay_ms.toFixed(1) + " ms" : "—";
     $("anc-f0-now").textContent = st.f0 ? st.f0.toFixed(1) + " Hz" : "—";
     $("anc-base-db").textContent = st.baseline_spl_db ?? "—";
     $("anc-now-db").textContent = st.spl_now_db ?? "—";
@@ -611,6 +612,7 @@ $("anc-form").addEventListener("submit", async (ev) => {
     out_device: $("anc-out-device").value || null,
     f0: parseFloat($("anc-f0").value) || null,
     gain: parseFloat($("anc-gain").value) || 0.08,
+    mic_delay_ms: parseFloat($("anc-mic-delay").value) ?? 5.0,
     baseline_s: parseFloat($("anc-baseline").value) || 5,
     duration_s: parseFloat($("anc-duration").value) || 60,
   };

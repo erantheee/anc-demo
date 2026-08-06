@@ -63,6 +63,7 @@ class ANCLiveRequest(BaseModel):
     duration_s: float = 60.0
     synthetic: bool = False
     echo_gain: float = 0.15
+    mic_delay_ms: float = 5.0  # 扬声器→误差麦延迟补偿（毫秒）
 
 
 class QuietZoneRequest(BaseModel):
@@ -199,7 +200,8 @@ def anc_live_start(req: ANCLiveRequest) -> dict:
         fs=req.fs, in_device=req.in_device or None, out_device=req.out_device or None,
         f0=req.f0, output_gain=req.gain, baseline_s=req.baseline_s,
         max_duration_s=req.duration_s, synthetic=req.synthetic,
-        echo_gain=req.echo_gain)
+        echo_gain=req.echo_gain,
+        speaker_mic_delay_s=req.mic_delay_ms / 1000.0)
     return anc_live.start()
 
 

@@ -27,7 +27,8 @@ class BlockHarmonicCanceller:
 
     def __init__(self, fs: float, f0: float, max_harmonics: int = 10,
                  mu: float = 1e-3, block: int = 512, output_gain: float = 0.08,
-                 max_weight_norm: float = 5.0):
+                 max_weight_norm: float = 5.0,
+                 speaker_mic_delay_s: float = 0.005):
         self.fs = float(fs)
         self.f0 = float(f0)
         self.max_harmonics = int(max_harmonics)
@@ -35,26 +36,57 @@ class BlockHarmonicCanceller:
         self.block = int(block)
         self.output_gain = float(output_gain)
         self.max_weight_norm = float(max_weight_norm)
+        self.speaker_mic_delay_s = float(speaker_mic_delay_s)
+        # 扬声器→误差麦声学延迟（样本数）。输出需"向前预测"这么多样本，
+        # 使此刻播出的反相波到达误差麦时恰好对准那时的噪声相位。
+        self.predict_ahead_samples = int(round(self.speaker_mic_delay_s * self.fs))
         self.w = np.zeros(2 * self.max_harmonics)
         self._n = 0  # 采样点游标（秒 = n/fs）
         self._basis = self._build_basis()
 
-    def _build_basis(self) -> np.ndarray:
-        t = (self._n + np.arange(self.block)) / self.fs
+    def _basis_at(self, start: int) -> np.ndarray:
+        """cos/sin 基函数在采样区间 [start, start+block) 的矩阵。"""
+        t = (start + np.arange(self.block)) / self.fs
         basis = np.zeros((self.block, 2 * self.max_harmonics))
         for k in range(1, self.max_harmonics + 1):
             ph = 2.0 * np.pi * self.f0 * k * t
             basis[:, 2 * (k - 1)] = np.cos(ph)
             basis[:, 2 * (k - 1) + 1] = np.sin(ph)
+        return basis
+
+    def _build_basis(self) -> np.ndarray:
+        basis = self._basis_at(self._n)
         self._n += self.block
         return basis
+
+    def _build_output_basis(self) -> np.ndarray:
+        """输出重建基函数：相位向前推 predict_ahead_samples 个采样点。
+
+        延迟符号约定（关键）：扬声器在时刻 t 播放的声音经过 delay 秒才到达
+        误差麦（时刻 t + delay）。因此反相波必须对准"到达时刻"的噪声，即此刻
+        输出应抵消噪声(t + delay)，也就是把噪声相位"向前预测" delay →
+        predict_ahead_samples = +delay·fs，输出基函数取 n + predict_ahead_samples。
+        若取反（向后预测）则会去抵消 delay 之前的噪声，到达误差麦时相位错开 2·delay，
+        反而更差（离线仿真与单测验证了该方向）。
+        NLMS 更新仍用当前相位跟踪噪声：对周期信号权重即傅里叶系数，与观测相位
+        无关，因此只需在输出侧平移基函数，更新公式不变。
+
+        注意：_n 在每次 _build_basis() 后已指向"下一 block 起点"，故当前 block
+        起点是 _n - block；输出预测基必须从当前 block 起点平移，否则会多移一整 block。
+        """
+        block_start = self._n - self.block
+        return self._basis_at(block_start + self.predict_ahead_samples)
 
     def skip_block(self) -> None:
         """不更新权重，仅推进相位游标（xrun 丢 block 时保持与音频时钟对齐）。"""
         self._basis = self._build_basis()
 
     def process_block(self, desired: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """desired: [block] 误差麦 block。返回 (y_block, e_block)。"""
+        """desired: [block] 误差麦 block。返回 (y_out, e_block)。
+
+        y_out 用预测基重建（补偿扬声器→麦延迟），供反相输出；
+        e = desired - y_now 仍是当前相位下的 NLMS 误差（更新用）。
+        """
         X = self._basis
         d = np.asarray(desired, dtype=np.float64)[: self.block]
         if len(d) < self.block:
@@ -69,8 +101,12 @@ class BlockHarmonicCanceller:
         n = float(np.linalg.norm(self.w))
         if n > self.max_weight_norm:
             self.w *= self.max_weight_norm / n
+        if self.predict_ahead_samples:
+            y_out = self._build_output_basis() @ self.w
+        else:
+            y_out = y
         self._basis = self._build_basis()
-        return y, e
+        return y_out, e
 
 
 def compute_safe_output(y: np.ndarray, in_rms: float, gain: float,
@@ -98,6 +134,7 @@ class LiveState:
     phase: str = "idle"  # idle | baseline | cancelling | done
     f0: float | None = None
     gain: float = 0.08
+    mic_delay_ms: float = 5.0  # 扬声器→误差麦延迟补偿（当前生效值）
     spl_now_db: float | None = None
     baseline_spl_db: float | None = None
     cancelling_spl_db: float | None = None
@@ -113,7 +150,8 @@ class LiveANCEngine:
                  block: int = 512, f0: float | None = None, max_harmonics: int = 10,
                  mu: float = 2e-2, output_gain: float = 0.08, baseline_s: float = 5.0,
                  max_duration_s: float = 60.0, synthetic: bool = False,
-                 echo_gain: float = 0.0) -> None:
+                 echo_gain: float = 0.0,
+                 speaker_mic_delay_s: float = 0.005) -> None:
         self.fs = int(fs)
         self.in_device = in_device
         self.out_device = out_device
@@ -126,6 +164,7 @@ class LiveANCEngine:
         self.max_duration_s = float(max_duration_s)
         self.synthetic = bool(synthetic)
         self.echo_gain = float(echo_gain)
+        self.speaker_mic_delay_s = float(speaker_mic_delay_s)
 
         self.state = LiveState()
         self.d_buf: list[np.ndarray] = []   # 基线（ANC off）
@@ -143,7 +182,8 @@ class LiveANCEngine:
             return {"started": False, "message": "已在运行"}
         with self._lock:
             self.state = LiveState(state="running", phase="baseline",
-                                   gain=self.output_gain, f0=self.f0_init)
+                                   gain=self.output_gain, f0=self.f0_init,
+                                   mic_delay_ms=self.speaker_mic_delay_s * 1000.0)
             self.d_buf = []
             self.e_buf = []
             self._canceller = None
@@ -168,6 +208,7 @@ class LiveANCEngine:
                 "phase": st.phase,
                 "f0": st.f0,
                 "gain": st.gain,
+                "mic_delay_ms": round(st.mic_delay_ms, 1),
                 "spl_now_db": round(st.spl_now_db, 1) if st.spl_now_db is not None else None,
                 "baseline_spl_db": round(st.baseline_spl_db, 1) if st.baseline_spl_db is not None else None,
                 "cancelling_spl_db": round(st.cancelling_spl_db, 1) if st.cancelling_spl_db is not None else None,
@@ -221,7 +262,8 @@ class LiveANCEngine:
             self.state.f0 = float(f0)
             self._canceller = BlockHarmonicCanceller(
                 fs=self.fs, f0=float(f0), max_harmonics=self.max_harmonics,
-                mu=self.mu, block=self.block, output_gain=self.output_gain)
+                mu=self.mu, block=self.block, output_gain=self.output_gain,
+                speaker_mic_delay_s=self.speaker_mic_delay_s)
             self.state.phase = "cancelling"
 
     def _finalize(self) -> None:

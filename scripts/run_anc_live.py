@@ -80,6 +80,10 @@ def main() -> None:
     ap.add_argument("--echo-gain", type=float, default=0.0,
                     help="合成模式：反相输出被误差麦回采的增益（模拟声学环路）")
     ap.add_argument("--block", type=int, default=512, help="音频 block 大小，默认 512")
+    ap.add_argument("--mic-delay-ms", type=float, default=5.0,
+                    help="扬声器→误差麦延迟补偿（毫秒，默认 5.0）。"
+                         "麦克风紧贴扬声器时约 0.5-1ms；相距 0.5m 约 2ms；"
+                         "1.5m 约 5ms（需按现场实测微调）")
     args = ap.parse_args()
 
     if args.list:
@@ -94,7 +98,8 @@ def main() -> None:
         block=args.block, f0=args.f0, max_harmonics=args.harmonics, mu=args.mu,
         output_gain=args.gain, baseline_s=args.baseline,
         max_duration_s=args.duration, synthetic=args.synthetic,
-        echo_gain=args.echo_gain)
+        echo_gain=args.echo_gain,
+        speaker_mic_delay_s=args.mic_delay_ms / 1000.0)
 
     mode = "合成" if args.synthetic else "真机"
     print(f"[M2] {mode}模式：基线 {args.baseline:.0f}s（ANC off）→ 实时消除（ANC on）"
