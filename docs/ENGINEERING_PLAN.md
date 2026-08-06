@@ -50,7 +50,9 @@
 
 ```
 app/
-├── capture.py      音频采集（sounddevice / arecord 兜底），统一录音接口
+├── capture.py      音频采集（sounddevice / arecord 兜底），统一录音接口，内存录音 record_buffer
+├── monitor.py      实时监控线程：周期采样 → SPL/频谱/来源/Pi 状态（供仪表盘轮询）
+├── grid.py         后台网格测量任务：网格录音 → 分析 → 插值 surface → 建议静音区
 ├── analyze.py      SPL / 频谱 / 音调峰值 / A 加权 / 音调占比
 ├── source_id.py    频谱峰值 → 噪声源归属（匹配 Profile）
 ├── noise_map.py    网格测量 → 2D 噪声地图（插值 + 导出）
@@ -58,7 +60,8 @@ app/
 ├── position.py     ArUco 标记检测 → 打印机 6DoF 位姿 → 房间坐标
 ├── quiet_zone.py   静音区选择与可行性检查（安静区尺寸、延迟预算）
 ├── evaluate.py     ANC 前后 A/B 评估：总 dB、音调 dB、A 加权、频谱差
-├── main.py         FastAPI Web UI / API（:8000）
+├── main.py         FastAPI Web UI / API（:8000），挂载 app/web 静态仪表盘
+├── web/            仪表盘前端（原生 HTML/JS/CSS，无构建步骤）
 ├── anc/
 │   ├── fxlms.py    Filtered-x LMS 自适应滤波
 │   ├── harmonic.py 周期噪声谐波消除（自适应陷波 / PLL 基频跟踪）
@@ -91,9 +94,49 @@ scripts/
 
 每个场景一个 JSON：预期频谱签名、参考麦克风建议位置、ANC 可行性、特殊注意点。
 
+## 里程碑 M1.5 — Web 仪表盘
+
+在 M1 与 M2 之间插入的一个可演示里程碑：让 demo"看得见"，展示三件事——
+实时噪声大小、树莓派是否在工作、建模后建议静音区放哪。
+
+### API
+
+| 端点 | 方法 | 说明 |
+|---|---|---|
+| `/` | GET | 静态仪表盘（`app/web/`） |
+| `/api/live` | GET | 实时噪声快照 + Pi 状态（监控线程每 3s 采样 2s） |
+| `/api/grid/measure` | POST | 启动后台网格测量 `{origin, size, step, per_point_s, synthetic}` |
+| `/api/grid/status` | GET | 任务进度 + 结果（测点、插值 surface、来源、建议静音区） |
+| `/api/quiet-zone` | POST | 点选静音区 `{x, y, source_x, source_y}` → 可行性检查 |
+| `/health` `/api/status` `/api/report` | GET | 保留既有端点 |
+
+### 交互流
+
+```mermaid
+flowchart LR
+  mic[USB 麦克风] --> mon[监控线程 3s/2s]
+  mic --> grid[网格测量线程]
+  mon --> api[FastAPI :8000]
+  grid --> api
+  api --> web[app/web 仪表盘]
+  web -->|点击地图选点| api
+```
+
+网格测量运行时自动暂停实时监控（`monitor.set_paused`），避免抢占音频设备。
+
+### 验收（M1.5）
+
+- [ ] 仪表盘在浏览器打开，实时 SPL / 频谱 / 来源 / Pi 状态每 3s 刷新。
+- [ ] 配置网格（范围/步长/每点时长）后一键测量，进度条实时更新。
+- [ ] 测量完成后显示噪声地图热力图 + 建议静音区圆（直径 = 安静区直径）。
+- [ ] 点选地图任意点，返回距离 / 传播延迟 / 安静区直径 / 可行性结论。
+- [ ] `ANC_SYNTHETIC=1` 时无硬件即可跑通全部流程（本机自测）。
+- [ ] 系统在 Pi 上以 systemd 服务自启（`anc-demo.service` 不变，端口 8000）。
+
 ## 验收
 
 - [ ] M1：在真实 3D 打印机房间完成网格测量，输出噪声地图 + 来源归属报告。
+- [ ] M1.5：仪表盘运行，实时噪声 + Pi 状态 + 交互式静音区建议可用（见上）。
 - [ ] M2：误差麦克风处 ANC 开启 vs 关闭 dB 差（音调成分 ≥ 10 dB 视为 Demo 成功）。
 - [ ] M3：摄像头定位打印机坐标误差 < 30 cm；打印状态检测准确。
 - [ ] M4：至少一个非打印机场景跑通测量 → 来源归属 → ANC 评估。

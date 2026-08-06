@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pi ANC Demo — 噪声监控与静音区规划</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">ANC</span>
+      <h1>Pi 降噪 Demo</h1>
+    </div>
+    <div class="status-strip">
+      <div class="status-item">
+        <span class="dot" id="pi-dot"></span>
+        <span id="pi-status">…</span>
+      </div>
+      <div class="status-item">CPU <span id="cpu-temp">—</span></div>
+      <div class="status-item">运行 <span id="uptime">—</span></div>
+      <div class="status-item">采样 <span id="last-sample">—</span></div>
+    </div>
+  </header>
+
+  <main class="grid">
+    <!-- 实时噪声 -->
+    <section class="card" id="card-live">
+      <h2>实时噪声</h2>
+      <div class="spl-wrap">
+        <div class="spl-big">
+          <span class="spl-num" id="spl-num">--</span>
+          <span class="spl-unit">dB</span>
+        </div>
+        <div class="spl-meta">
+          <div class="row"><span>主频</span><strong id="dominant">—</strong></div>
+          <div class="row"><span>来源猜测</span><strong id="source-guess">—</strong></div>
+          <div class="row"><span>频段</span><span id="bands" class="bands"></span></div>
+        </div>
+      </div>
+      <canvas id="spectrum" width="640" height="180"></canvas>
+      <p class="hint" id="live-hint">监控每 3 秒采样一次，请让麦克风对准噪声源。</p>
+    </section>
+
+    <!-- 建模 -->
+    <section class="card" id="card-grid">
+      <h2>房间建模与静音区建议</h2>
+      <form id="grid-form" class="grid-form">
+        <label>起点 x(m) <input type="number" id="origin-x" value="0" step="0.1"></label>
+        <label>起点 y(m) <input type="number" id="origin-y" value="0" step="0.1"></label>
+        <label>范围 x(m) <input type="number" id="size-x" value="1" step="0.1"></label>
+        <label>范围 y(m) <input type="number" id="size-y" value="1" step="0.1"></label>
+        <label>步长(m) <input type="number" id="step" value="0.5" step="0.1"></label>
+        <label>每点(s) <input type="number" id="per-point-s" value="10" step="1"></label>
+        <label>源高度 z(m) <input type="number" id="height-m" value="0.5" step="0.05"></label>
+        <label class="check"><input type="checkbox" id="synthetic" checked> 合成模式</label>
+        <button type="submit" id="grid-start" class="primary">开始测量</button>
+      </form>
+      <div class="progress-wrap">
+        <div class="progress-bar"><div id="progress-fill"></div></div>
+        <span id="progress-label">空闲</span>
+      </div>
+
+      <div class="map-wrap">
+        <canvas id="map" width="520" height="520"></canvas>
+        <div class="map-legend">
+          <span class="lg-strong">强</span>
+          <div class="lg-bar"></div>
+          <span class="lg-weak">弱</span>
+        </div>
+      </div>
+      <div class="map-actions">
+        <button id="mark-source" class="ghost">标记为噪声源</button>
+        <button id="reset-map" class="ghost">重置视图</button>
+      </div>
+
+      <div id="qz-panel" class="qz-panel hidden">
+        <h3>静音区可行性</h3>
+        <div class="row"><span>噪声源</span><strong id="qz-source-pos">—</strong></div>
+        <div class="row"><span>所选点</span><strong id="qz-pos">—</strong></div>
+        <div class="row"><span>距噪声源</span><strong id="qz-dist">—</strong></div>
+        <div class="row"><span>传播延迟</span><strong id="qz-delay">—</strong></div>
+        <div class="row"><span>安静区直径</span><strong id="qz-diameter">—</strong></div>
+        <div class="row"><span>结论</span><strong id="qz-verdict">—</strong></div>
+      </div>
+
+      <div id="recommend-panel" class="recommend hidden">
+        <h3>3D 打印机位置（自动定位）</h3>
+        <div id="printer-pos-body" class="pos-3d">
+          <div class="axis"><span class="axis-label">X</span><strong id="printer-x">—</strong></div>
+          <div class="axis"><span class="axis-label">Y</span><strong id="printer-y">—</strong></div>
+          <div class="axis"><span class="axis-label">Z</span><strong id="printer-z">—</strong></div>
+        </div>
+        <p class="hint" id="printer-method">由网格测量最高 SPL 点 + 源高度 z 推算（摄像头 ArUco 定位见 M3）。</p>
+        <h3 class="sub">建议静音区</h3>
+        <div id="recommend-body">—</div>
+      </div>
+    </section>
+
+    <!-- ANC -->
+    <section class="card" id="card-anc">
+      <h2>主动降噪 ANC</h2>
+      <div class="anc-placeholder">
+        <p>ANC 尚未接入本里程碑。</p>
+        <p>当前阶段：测量 → 确认噪声特征 → 定位静音区。下一步在此基础上接谐波/宽带降噪。</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>Pi ANC Demo · 树莓派实时噪声监控与静音区规划 · M1.5</footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

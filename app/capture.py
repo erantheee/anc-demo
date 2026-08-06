@@ -4,6 +4,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import numpy as np
+
 
 def list_devices() -> list[dict]:
     try:
@@ -38,6 +40,27 @@ def record(duration: float, fs: int = 48000, channels: int = 2,
     sd.wait()
     sf.write(str(out_path), rec, fs)
     return out_path
+
+
+def record_buffer(duration: float, fs: int = 48000, channels: int = 2,
+                  device: str | int | None = None) -> np.ndarray:
+    """内存录音，返回 (n, channels) float32 ndarray。用于高频采样，不写磁盘。"""
+    try:
+        import sounddevice as sd
+    except ImportError:
+        raise RuntimeError("需要 sounddevice：pip install -e .[audio]")
+    try:
+        rec = sd.rec(int(duration * fs), samplerate=fs, channels=channels,
+                     dtype="float32", device=device)
+        sd.wait()
+    except Exception as exc:
+        raise RuntimeError(
+            f"录音设备不可用（{exc}）。请检查麦克风连接，"
+            "或用勾选/设置 ANC_SYNTHETIC=1 走合成模式"
+        ) from exc
+    if rec.ndim > 1:
+        rec = rec.mean(axis=1)
+    return np.asarray(rec, dtype=np.float64)
 
 
 def record_with_arecord(duration: float, fs: int = 16000, channels: int = 1,

@@ -117,13 +117,13 @@ def tonality_ratio(freqs: np.ndarray, psd_db: np.ndarray, peaks: list[TonalPeak]
 
 
 def band_energy_db(samples: np.ndarray, fs: float) -> dict[str, float]:
-    f, psd = spectrum_db(samples, fs)
+    f, psd_db = spectrum_db(samples, fs)
     df = float(f[1] - f[0])
     out: dict[str, float] = {}
     for name, (lo, hi) in {"low": LOW_BAND, "mid": MID_BAND, "high": HIGH_BAND}.items():
         m = (f >= lo) & (f <= hi)
-        power = float(np.sum(psd[m]) * df)
-        out[name] = 20.0 * np.log10(max(power, 1e-20))
+        power = float(np.sum(10.0 ** (psd_db[m] / 10.0)) * df)
+        out[name] = 10.0 * np.log10(max(power, 1e-20))
     return out
 
 
@@ -191,7 +191,7 @@ def analyze(samples: np.ndarray, fs: float, calibration_offset_db: float = 0.0) 
         peaks=sorted(peaks, key=lambda p: p.level_db, reverse=True),
         tonality_ratio=tr,
         dominant_freq=float(dominant) if dominant else None,
-        harmonic_family=[fund] + [freq for freq, _ in matched[1:]] if fund else [],
+        harmonic_family=[fund] + [pk.freq for pk, _ in matched[1:]] if fund else [],
         band_spl_db=band_energy_db(x, fs),
         calibration_offset_db=calibration_offset_db,
     )
