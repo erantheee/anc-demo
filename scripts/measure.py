@@ -74,6 +74,16 @@ def main() -> None:
     offset = load_calibration(args.calibration)
     profiles = load_profiles()
 
+    # 真实测量前预检输入设备：没有麦克风立即明确报错，避免中途崩溃/误报
+    if not args.synthetic and args.driver != "arecord":
+        dev = capture.default_input_device()
+        if dev is None:
+            print("ERROR: 未检测到任何麦克风/输入设备。")
+            print("  请接入 USB 麦克风（或 I2S 编解码器）后重试；")
+            print("  或使用 --synthetic 走合成噪声模式。")
+            raise SystemExit(2)
+        print(f"输入设备: [{dev['index']}] {dev['name']} ({dev['channels']}ch)")
+
     points: list[GridPoint] = []
     reports: list[AnalysisReport] = []
     for i, (x, y) in enumerate(grid):

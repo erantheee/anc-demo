@@ -54,6 +54,7 @@ class MonitorState:
     spectrum_db: list[float] = field(default_factory=list)
     last_update_ts: float | None = None
     error: str | None = None
+    mic_ok: bool | None = None  # None=未知, True=有有效输入, False=无麦克风/信号无效
     # Pi 状态
     uptime_s: float | None = None
     cpu_temp_c: float | None = None
@@ -113,6 +114,7 @@ class Monitor:
                     round(time.time() - self.state.last_update_ts, 1)
                     if self.state.last_update_ts else None
                 ),
+                "mic_ok": self.state.mic_ok,
                 "uptime_s": self.state.uptime_s,
                 "cpu_temp_c": self.state.cpu_temp_c,
                 "error": self.state.error,
@@ -148,6 +150,7 @@ class Monitor:
                     freqs, psd_db = self._spectrum(samples)
                     with self._lock:
                         self.state.paused = False
+                        self.state.mic_ok = True
                         self.state.spl_db = report.spl_db or report.rms_db
                         self.state.spl_db_a = report.spl_db_a
                         self.state.rms_db = report.rms_db
@@ -160,6 +163,21 @@ class Monitor:
                         self.state.spectrum_freqs = [round(float(f), 1) for f in freqs[::step]]
                         self.state.spectrum_db = [round(float(v), 1) for v in psd_db[::step]]
                         self.state.source_guess, self.state.source_confidence = self._guess_source(report)
+                except RuntimeError as exc:
+                    # 无输入设备 / 信号无效：明确标记，绝不报误导性分贝
+                    with self._lock:
+                        self.state.mic_ok = False
+                        self.state.error = str(exc)
+                        self.state.spl_db = None
+                        self.state.spl_db_a = None
+                        self.state.rms_db = None
+                        self.state.dominant_freq = None
+                        self.state.source_guess = None
+                        self.state.source_confidence = None
+                        self.state.band_spl_db = {}
+                        self.state.spectrum_freqs = []
+                        self.state.spectrum_db = []
+                        self.state.last_update_ts = time.time()
                 except Exception as exc:  # 麦克风被占用等：记录但不退出
                     with self._lock:
                         self.state.error = str(exc)

@@ -251,6 +251,12 @@ class LiveANCEngine:
         d = np.concatenate(buf)
         with self._lock:
             self.state.baseline_spl_db = rms_db(d)
+        # 基线信号有效性：麦克风悬空/未接时 RMS 极低，禁止继续（避免"凭空降噪"）
+        if self.state.baseline_spl_db is not None and self.state.baseline_spl_db < -60.0:
+            raise RuntimeError(
+                "基线信号无效（RMS %.0f dBFS，低于可用阈值）。麦克风可能未连接或线缆悬空，"
+                "请检查误差麦克风后再试" % self.state.baseline_spl_db
+            )
         # 只用尾部 ~1s 估基频：自相关是 O(n²)，整段 3s/48k 会阻塞主循环数秒
         tail = d[-int(self.fs):] if len(d) >= self.fs else d
         f0 = self.f0_init or estimate_fundamental(tail, self.fs)
@@ -286,6 +292,17 @@ class LiveANCEngine:
 
     def _run_audio(self) -> None:
         import sounddevice as sd
+        from app import capture
+
+        # 输入设备预检：真机 ANC 必须有一支真实误差麦克风
+        if self.in_device is None:
+            inp = capture.default_input_device()
+            if inp is None:
+                raise RuntimeError(
+                    "未检测到任何麦克风/输入设备，无法进行真机 ANC。"
+                    "请接入 USB 麦克风（或 I2S 编解码器），或使用 --synthetic 自测"
+                )
+            self.in_device = inp["name"]
 
         self._pending_cancel = False
 

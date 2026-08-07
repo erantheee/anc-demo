@@ -57,7 +57,9 @@ async function pollLive() {
 
 function updateLive(s) {
   // Pi 状态
-  if (s.error) {
+  if (s.mic_ok === false) {
+    setPiStatus("paused", "⚠ 无麦克风: " + (s.error || "未检测到输入设备"));
+  } else if (s.error) {
     setPiStatus("paused", "异常: " + s.error);
   } else if (!s.running) {
     setPiStatus("off", "未运行");
@@ -71,18 +73,22 @@ function updateLive(s) {
   $("last-sample").textContent = fmt(s.last_update_age_s, "s前");
 
   // 噪声
-  const spl = s.spl_db ?? s.rms_db;
+  const spl = s.mic_ok === false ? null : (s.spl_db ?? s.rms_db);
   $("spl-num").textContent = spl === null ? "--" : spl.toFixed(0);
-  $("dominant").textContent = fmt(s.dominant_freq, " Hz");
-  $("source-guess").textContent = s.source_guess
-    ? `${s.source_guess} (${Math.round((s.source_confidence || 0) * 100)}%)`
-    : "未识别";
+  $("spl-num").classList.toggle("dim", spl === null);
+  $("dominant").textContent = fmt(s.mic_ok === false ? null : s.dominant_freq, " Hz");
+  $("source-guess").textContent = s.mic_ok === false
+    ? "无输入信号"
+    : (s.source_guess
+      ? `${s.source_guess} (${Math.round((s.source_confidence || 0) * 100)}%)`
+      : "未识别");
 
   const bands = s.band_spl_db || {};
-  $("bands").textContent = Object.entries(bands)
-    .map(([k, v]) => `${k}: ${v}dB`).join(" · ");
+  $("bands").textContent = s.mic_ok === false
+    ? "无有效输入信号"
+    : Object.entries(bands).map(([k, v]) => `${k}: ${v}dB`).join(" · ");
 
-  if (s.spectrum_freqs && s.spectrum_db) {
+  if (s.spectrum_freqs && s.spectrum_db && s.mic_ok !== false) {
     drawSpectrum(s.spectrum_freqs, s.spectrum_db);
   }
 }

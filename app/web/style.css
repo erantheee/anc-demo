@@ -84,6 +84,7 @@ main.grid {
 .spl-wrap { display: flex; gap: 18px; align-items: center; margin-bottom: 14px; }
 .spl-big { flex: 0 0 auto; }
 .spl-num { font-size: 56px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.spl-num.dim { color: var(--muted); opacity: 0.6; }
 .spl-unit { color: var(--muted); font-size: 16px; margin-left: 4px; }
 .spl-meta { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
 .row { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); }
