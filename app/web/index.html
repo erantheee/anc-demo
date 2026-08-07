@@ -53,7 +53,7 @@
         <label>步长(m) <input type="number" id="step" value="0.5" step="0.1"></label>
         <label>每点(s) <input type="number" id="per-point-s" value="10" step="1"></label>
         <label>源高度 z(m) <input type="number" id="height-m" value="0.5" step="0.05"></label>
-        <label class="check"><input type="checkbox" id="synthetic" checked> 合成模式</label>
+        <label class="check"><input type="checkbox" id="synthetic"> 合成模式</label>
         <button type="submit" id="grid-start" class="primary">开始测量</button>
       </form>
       <div class="progress-wrap">
@@ -100,14 +100,16 @@
     <!-- ANC -->
     <section class="card" id="card-anc">
       <h2>主动降噪 ANC（实时）</h2>
+      <div class="anc-source" id="anc-source-panel">
+        <h3>噪声源识别</h3>
+        <div class="row"><span>来源类型</span><strong id="anc-source-name">—</strong></div>
+        <div class="row"><span>置信度</span><strong id="anc-source-conf">—</strong></div>
+        <div class="row"><span>建议基频</span><strong id="anc-source-f0">—</strong></div>
+        <div class="row"><span>ANC 可行性</span><strong id="anc-source-feas">—</strong></div>
+        <p class="hint" id="anc-source-notes">等待监控采样…</p>
+      </div>
       <form id="anc-form" class="grid-form">
-        <label class="check"><input type="checkbox" id="anc-synthetic" checked> 合成模式</label>
-        <label>输入设备
-          <select id="anc-in-device"><option value="">默认</option></select>
-        </label>
-        <label>输出设备
-          <select id="anc-out-device"><option value="">默认</option></select>
-        </label>
+        <label class="check"><input type="checkbox" id="anc-synthetic"> 合成模式</label>
         <label>基频 f0(Hz) <input type="number" id="anc-f0" placeholder="自动估计"></label>
         <label>输出增益 <input type="number" id="anc-gain" value="0.08" step="0.01"></label>
         <label>麦克风延迟(ms) <input type="number" id="anc-mic-delay" value="5" step="0.5" min="0"></label>
@@ -126,7 +128,7 @@
         <div class="row"><span>总降噪</span><strong id="anc-reduction">—</strong></div>
       </div>
       <canvas id="anc-trend" width="640" height="140"></canvas>
-      <p class="hint">流程：采基线（ANC off）→ 估计基频 → 实时输出反相谐波。对步进电机 / 风扇 / 压缩机等稳态周期噪声有效。</p>
+      <p class="hint">噪声由手机 / 电脑在旁边播放，树莓派的误差麦克风采集后实时输出反相谐波。对步进电机 / 风扇 / 压缩机等稳态周期噪声有效。</p>
       <div id="anc-report" class="anc-report hidden">
         <h3>A/B 降噪报告</h3>
         <div id="anc-report-body"></div>
