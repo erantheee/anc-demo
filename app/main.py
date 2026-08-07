@@ -224,6 +224,43 @@ def anc_live_status() -> dict:
     return anc_live.status()
 
 
+@app.get("/api/anc/source")
+def anc_source() -> dict:
+    """ANC 板块噪声源识别：基于最近一次监控分析，返回来源类型、建议 f0 与 ANC 可行性。
+
+    树莓派不区分"输入/输出设备"：噪声由手机/电脑在旁边播放，误差麦采集，
+    树莓派通过默认输出播放反相波。此端点只回答"当前是什么噪声源、ANC 是否值得做"。
+    """
+    report = monitor.last_report()
+    if report is None:
+        return {"found": False, "error": "暂无分析数据（等待监控采样）"}
+
+    from app.source_id import load_profiles, match_sources, recommend_anc
+
+    hits = match_sources(report)
+    rec = recommend_anc(report)
+    best = hits[0] if hits else None
+    profiles = {p.get("id"): p for p in load_profiles()}
+    info = profiles.get(best.source) if best else None
+
+    # 谐波家族基频优先作为 f0 建议（谐波消除的关键参数）
+    fund = report.harmonic_family[0] if report.harmonic_family else report.dominant_freq
+    return {
+        "found": True,
+        "source_id": best.source if best else None,
+        "source_name": (info or {}).get("name") if best else None,
+        "confidence": best.confidence if best else None,
+        "freqs_hz": best.freqs_hz if best else [],
+        "recommended_f0": round(float(fund), 1) if fund else None,
+        "dominant_freq": report.dominant_freq,
+        "anc_worthwhile": rec["anc_worthwhile"],
+        "reasons": rec["reasons"],
+        "feasibility": (info or {}).get("anc_feasibility"),
+        "notes": (info or {}).get("notes"),
+        "reference_mic": (info or {}).get("reference_mic"),
+    }
+
+
 @app.get("/api/anc/live/report")
 def anc_live_report() -> dict:
     """实时 ANC 完成后的 A/B 降噪报告。"""

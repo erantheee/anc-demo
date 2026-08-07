@@ -74,6 +74,7 @@ class Monitor:
         self._stop = threading.Event()
         self._paused = threading.Event()
         self._thread: threading.Thread | None = None
+        self._last_report: AnalysisReport | None = None
 
     # ---- 线程控制 ----
 
@@ -120,6 +121,11 @@ class Monitor:
                 "error": self.state.error,
             }
 
+    def last_report(self) -> AnalysisReport | None:
+        """返回最近一次分析报告（供 ANC 板块做来源识别与参数建议）。"""
+        with self._lock:
+            return self._last_report
+
     # ---- 内部 ----
 
     def _sample(self) -> tuple[np.ndarray, AnalysisReport]:
@@ -149,6 +155,7 @@ class Monitor:
                     samples, report = self._sample()
                     freqs, psd_db = self._spectrum(samples)
                     with self._lock:
+                        self._last_report = report
                         self.state.paused = False
                         self.state.mic_ok = True
                         self.state.spl_db = report.spl_db or report.rms_db
@@ -166,6 +173,7 @@ class Monitor:
                 except RuntimeError as exc:
                     # 无输入设备 / 信号无效：明确标记，绝不报误导性分贝
                     with self._lock:
+                        self._last_report = None
                         self.state.mic_ok = False
                         self.state.error = str(exc)
                         self.state.spl_db = None

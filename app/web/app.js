@@ -496,26 +496,7 @@ const ancTrend = $("anc-trend");
 const ancTrendCtx = ancTrend.getContext("2d");
 let ancHistory = [];       // 实时 SPL 曲线
 let ancReportShown = false;
-
-async function loadAudioDevices() {
-  try {
-    const res = await fetch("/api/audio/devices");
-    const r = await res.json();
-    if (!r.devices) return;
-    for (const kind of ["in", "out"]) {
-      const sel = kind === "in" ? $("anc-in-device") : $("anc-out-device");
-      sel.innerHTML = '<option value="">默认</option>';
-      for (const d of r.devices) {
-        const ch = kind === "in" ? d.in_channels : d.out_channels;
-        if (ch < 1) continue;
-        const opt = document.createElement("option");
-        opt.value = d.name;
-        opt.textContent = `${d.name} [${d.index}] (${ch}ch @${d.default_samplerate}Hz)`;
-        sel.appendChild(opt);
-      }
-    }
-  } catch { /* 设备列表不可用则忽略 */ }
-}
+let ancSourceInjected = false;
 
 function setAncButton(disabled, text) {
   $("anc-start").disabled = disabled;
@@ -583,6 +564,40 @@ async function pollAnc() {
   } catch { /* 轮询失败忽略 */ }
 }
 
+async function pollAncSource() {
+  try {
+    const res = await fetch("/api/anc/source");
+    const r = await res.json();
+    if (!r.found) {
+      $("anc-source-name").textContent = "—";
+      $("anc-source-conf").textContent = "—";
+      $("anc-source-f0").textContent = "—";
+      $("anc-source-feas").textContent = "—";
+      $("anc-source-notes").textContent = r.error || "暂无分析数据";
+      return;
+    }
+    $("anc-source-name").textContent = r.source_name || r.source_id || "未识别";
+    $("anc-source-conf").textContent = r.confidence
+      ? Math.round(r.confidence * 100) + "%" : "—";
+    $("anc-source-f0").textContent = r.recommended_f0
+      ? r.recommended_f0.toFixed(1) + " Hz" : "—";
+    const feas = r.feasibility || {};
+    $("anc-source-feas").textContent = r.anc_worthwhile
+      ? "值得（音调成分可消除）" : "收益有限";
+    let notes = r.notes || "";
+    if (r.anc_worthwhile && r.recommended_f0) {
+      notes = `建议以 ${r.recommended_f0.toFixed(1)} Hz 为基频启动 ANC。` + notes;
+    }
+    $("anc-source-notes").textContent = notes || "—";
+
+    // 识别结果预置 f0：仅在用户未手动输入时自动填入
+    if (!ancSourceInjected && r.recommended_f0 && !$("anc-f0").value) {
+      $("anc-f0").value = r.recommended_f0.toFixed(1);
+      ancSourceInjected = true;
+    }
+  } catch { /* 轮询失败忽略 */ }
+}
+
 function drawAncTrend() {
   const ctx = ancTrendCtx, c = ancTrend;
   ctx.clearRect(0, 0, c.width, c.height);
@@ -614,8 +629,6 @@ $("anc-form").addEventListener("submit", async (ev) => {
   drawAncTrend();
   const body = {
     synthetic: $("anc-synthetic").checked,
-    in_device: $("anc-in-device").value || null,
-    out_device: $("anc-out-device").value || null,
     f0: parseFloat($("anc-f0").value) || null,
     gain: parseFloat($("anc-gain").value) || 0.08,
     mic_delay_ms: parseFloat($("anc-mic-delay").value) ?? 5.0,
@@ -644,7 +657,8 @@ $("grid-form").addEventListener("submit", startGrid);
 pollLive();
 setInterval(pollLive, LIVE_MS);
 pollGrid();  // 恢复已完成的网格测量结果（刷新页面后）
-loadAudioDevices();
+pollAncSource();
+setInterval(pollAncSource, 3000);
 pollAnc();
 setInterval(pollAnc, ANC_POLL_MS);
 drawMap();
