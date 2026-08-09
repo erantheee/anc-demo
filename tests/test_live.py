@@ -328,16 +328,36 @@ def test_watchdog_reduces_gain_when_anc_amplifies_noise():
     watchdog 应降增益，而不是误判为"降噪不足"继续加增益。
 
     回归保护：基线 -56.6dB、SPL 稳定在 -7dB（高 49dB）时，旧逻辑会一路
-    加增益放大尖锐声；新逻辑必须降增益。
+    加增益放大尖锐声；新逻辑必须降增益。降增益后若 SPL 随之下降，说明
+    确实是 ANC 在放大 → 保持低增益。
     """
     eng = _wd_engine(baseline_db=-56.6, gain=0.40)
-    for v in [-7.0] * 60:  # 稳定在高位（ANC 放大噪声），无上升斜率
+    # 先喂高位稳定 SPL（触发 2a 降增益），随后 SPL 随增益下降（有效）
+    vals = ([-7.0] * 40) + ([-12.0] * 80)
+    for v in vals:
         eng._watchdog_feed(v)
     st = eng.status()
     assert st["gain"] < 0.40, f"放大噪声时应降增益，实际 {st['gain']}"
     assert st["watchdog"]["reduce_count"] >= 1, st["watchdog"]
     assert any(e["action"] == "reduce_gain" for e in st["watchdog"]["log"])
     assert st["watchdog"]["increase_count"] == 0, st["watchdog"]
+
+
+def test_watchdog_restores_gain_when_reduction_ineffective():
+    """降增益后 SPL 不降（外部噪声源 / 声耦合主导，与增益无关）→ 不应把增益
+    一路砍到无法降噪，而应恢复增益并冻结 2a/2b。
+
+    回归保护：真机测试中出现基线 -53dB（安静）、用户中途开大打印机声源、
+    误差麦 SPL 稳定在 -8dB 时，旧逻辑连降 4 级增益到 0.02 仍无济于事。
+    """
+    eng = _wd_engine(baseline_db=-53.5, gain=0.20)
+    # 稳定高位且不随增益变化（模拟外部声源），喂足够多次覆盖 3 次验证窗口
+    for v in [-8.0] * 200:
+        eng._watchdog_feed(v)
+    st = eng.status()
+    # 增益应被恢复/保持在原值，而不是被砍到 min
+    assert st["gain"] >= 0.20, f"无效降增益应恢复，实际 {st['gain']}"
+    assert any(e["action"] == "restore_gain" for e in st["watchdog"]["log"]), st["watchdog"]["log"]
 
 
 def test_watchdog_gain_clamped_to_max():

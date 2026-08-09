@@ -334,6 +334,14 @@ class LiveANCEngine:
         self._wd_blocks_since_check = 0
         self._wd_check_every_blocks = max(1, int(0.5 * self.fs / max(self.block, 1)))
         self._wd_last_increase_ts = 0.0
+        # 规则 2a 因果验证：记录"降增益前"的 SPL 与增益，验证降增益是否真的
+        # 让误差麦 SPL 下降。若 SPL 与增益无关（外部噪声源变化 / 声耦合主导），
+        # 恢复增益并冻结 2a/2b 一段时间，避免误把增益砍没导致无法降噪。
+        self._wd_last_reduce_ts = 0.0
+        self._wd_reduce_spl_before: float | None = None
+        self._wd_reduce_gain_before: float | None = None
+        self._wd_reduce_check_count = 0
+        self._wd_rule2ab_freeze_until = 0.0
         self._wd_log_lock = threading.Lock()
 
         self.state = LiveState(watchdog_enabled=self.watchdog_enabled,
@@ -395,6 +403,11 @@ class LiveANCEngine:
             self._wd_spl_history = []
             self._wd_blocks_since_check = 0
             self._wd_last_increase_ts = 0.0
+            self._wd_last_reduce_ts = 0.0
+            self._wd_reduce_spl_before = None
+            self._wd_reduce_gain_before = None
+            self._wd_reduce_check_count = 0
+            self._wd_rule2ab_freeze_until = 0.0
             # 重置反馈中和环形缓冲（避免上一次运行的残留回声污染新一轮）
             self._out_hist[:] = 0.0
             self._out_pos = 0
@@ -739,6 +752,39 @@ class LiveANCEngine:
             baseline = st.baseline_spl_db
             now = time.time()
             if (baseline is not None and st.elapsed_s > self.baseline_s + 3.0):
+                # 因果验证：上次因规则 2a 降了增益，隔 3 次检查（≈1.5s）后看
+                # SPL 是否真的降下来了。验证完成前不再次触发 2a 降增益。
+                if self._wd_reduce_spl_before is not None:
+                    self._wd_reduce_check_count += 1
+                    if self._wd_reduce_check_count >= 3:
+                        spl_before = self._wd_reduce_spl_before
+                        gain_before = self._wd_reduce_gain_before or canceller.output_gain
+                        self._wd_reduce_spl_before = None
+                        self._wd_reduce_gain_before = None
+                        self._wd_reduce_check_count = 0
+                        if cur_spl >= spl_before - 1.0:
+                            if gain_before > canceller.output_gain:
+                                canceller.output_gain = gain_before
+                                st.gain = gain_before
+                                self._append_wd_log(
+                                    "restore_gain",
+                                    f"降增益无效（SPL {spl_before:.1f}→{cur_spl:.1f} 未降，"
+                                    f"疑为外部噪声源/声耦合），恢复增益 {gain_before:.2f}")
+                            self._wd_rule2ab_freeze_until = now + 15.0
+                            return
+                        self._append_wd_log(
+                            "reduce_effective",
+                            f"降增益有效（SPL {spl_before:.1f}→{cur_spl:.1f}），保持")
+                    else:
+                        # 验证窗口内：不再次触发 2a/2b，等因果结论
+                        return
+                else:
+                    self._wd_reduce_check_count = 0
+
+                # 冻结期：跳过 2a/2b 自动调节（规则 1 啸叫保护仍生效）
+                if now < self._wd_rule2ab_freeze_until:
+                    return
+
                 # 规则 2a：当前 SPL 明显高于基线 → ANC 在放大噪声（反相波与噪声
                 # 不匹配，如 f0 估计错误 / 相位失准），继续加增益只会更糟。
                 # 此时应降增益，把"尖锐放大"压回去。
@@ -748,13 +794,19 @@ class LiveANCEngine:
                         canceller.output_gain = new_gain
                         st.gain = new_gain
                         st.watchdog_reduce_count += 1
+                        self._wd_last_reduce_ts = now
+                        self._wd_reduce_spl_before = float(cur_spl)
+                        self._wd_reduce_gain_before = float(canceller.output_gain + 0.05)
                         self._append_wd_log(
                             "reduce_gain",
                             f"ANC 放大噪声（当前 {cur_spl:.1f} > 基线 {baseline:.1f} dB），"
                             f"降增益 {new_gain:.2f}")
                     return
-                # 规则 2b：降噪不足（还没降到目标）→ 增增益（有上限）
-                if (cur_spl > baseline - self.watchdog_reduction_target_db
+                # 规则 2b：降噪不足（还没降到目标）→ 增增益（有上限）。
+                # 仅在 SPL 处于"接近/略高于基线"的合理区间时增（若还远高于基线
+                # 说明要么在放大、要么外部声源主导，增增益无意义，避免与 2a 打架）
+                if (baseline - 12.0 <= cur_spl <= baseline + 6.0
+                        and cur_spl > baseline - self.watchdog_reduction_target_db
                         and canceller.output_gain < self.watchdog_max_gain
                         and now - self._wd_last_increase_ts > 2.0):
                     new_gain = min(self.watchdog_max_gain,
