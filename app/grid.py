@@ -13,6 +13,7 @@ import numpy as np
 
 from app import capture
 from app.analyze import analyze, stable_segment
+from app.calibration import get_offset_db
 from app.noise_map import GridPoint, build_noise_map
 from app.quiet_zone import zone_of_quiet_diameter
 from app.source_id import load_profiles, match_sources
@@ -86,6 +87,8 @@ class GridWorker:
         try:
             if self.monitor is not None:
                 self.monitor.set_paused(True)
+                # 等监控释放常驻录音流后再逐点录音，避免设备被占用
+                self.monitor.wait_paused()
             for i, (x, y) in enumerate(grid):
                 with self._lock:
                     self.result.progress = i / n
@@ -94,7 +97,7 @@ class GridWorker:
                     dist = np.hypot(x - origin_x, y - origin_y)
                     samples, _ = printer_noise(fs=fs, duration=per_point_s, seed=i)
                     samples = samples * float(np.clip(1.0 - 0.08 * dist, 0.3, 1.0))
-                    report = analyze(samples, fs)
+                    report = analyze(samples, fs, calibration_offset_db=get_offset_db())
                 else:
                     raw = capture.record_buffer(per_point_s, fs=fs)
                     samples = stable_segment(raw, fs)
@@ -102,7 +105,7 @@ class GridWorker:
                         with self._lock:
                             self.result.message = f"点 ({x:.2f},{y:.2f}) 无有效信号，跳过"
                         continue
-                    report = analyze(samples, fs)
+                    report = analyze(samples, fs, calibration_offset_db=get_offset_db())
                 hits = match_sources(report, profiles)
                 spl = report.spl_db if report.spl_db is not None else report.rms_db
                 points.append(GridPoint(x=x, y=y, spl_db=float(spl),

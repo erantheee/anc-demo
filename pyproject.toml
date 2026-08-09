@@ -27,6 +27,10 @@ web = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
 ]
+# Kimi 噪声自动检测 Agent（OpenAI 兼容 SDK）
+agent = [
+    "openai>=1.0",
+]
 dev = [
     "pytest>=8.0",
 ]

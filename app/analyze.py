@@ -160,6 +160,48 @@ def stable_segment(samples: np.ndarray, fs: float, frame_s: float = 0.25,
     return kept.astype(np.float64)
 
 
+def _a_weighted_db(samples: np.ndarray, fs: float) -> float:
+    """信号按 A 加权的宽带能量折算 dB（与 analyze 中 spl_db_a 同口径）。"""
+    f, psd_db = spectrum_db(samples, fs)
+    w_a = 10.0 ** (a_weight_db(f) / 10.0)
+    power = float(np.sum(psd_db_to_linear(psd_db) * w_a) * float(f[1] - f[0]))
+    if power <= 0:
+        return -120.0
+    return 20.0 * np.log10(max(power, 1e-20))
+
+
+def fast_spl_db(samples: np.ndarray, fs: float, window_s: float = 0.1,
+                hold_s: float | None = None) -> tuple[float, float]:
+    """短窗峰值 SPL（dBFS，未加标定偏移）。
+
+    供实时监控做"灵敏"读数：把信号切成 window_s 的短帧，在 hold_s 秒
+    窗口内（None=整个信号）取 RMS 最大的帧，返回 (未加权 dB, A 加权 dB)。
+    瞬态/敲击在短帧内不会被 2s 长窗的时间平均稀释——敲一下麦克风壳，
+    读数会立刻跳起来（整段 RMS 则几乎不动）。
+
+    注意：返回值为 dBFS 相对值，调用方自行叠加 calibration offset_db。
+    """
+    x = np.asarray(samples, dtype=np.float64)
+    if x.ndim > 1:
+        x = x.mean(axis=1)
+    if x.size == 0:
+        return -120.0, -120.0
+    frame = max(int(fs * window_s), 1)
+    n_frames = x.size // frame
+    if n_frames == 0:
+        db = rms_db(x)
+        return db, _a_weighted_db(x, fs)
+    frames = x[: n_frames * frame].reshape(n_frames, frame)
+    if hold_s is not None:
+        keep = max(int(hold_s * fs / frame), 1)
+        frames = frames[-keep:]
+    rms_vals = np.sqrt(np.mean(frames ** 2, axis=1))
+    idx = int(np.argmax(rms_vals))
+    db = 20.0 * np.log10(max(float(rms_vals[idx]), 1e-12))
+    db_a = _a_weighted_db(frames[idx], fs)
+    return float(db), float(db_a)
+
+
 def analyze(samples: np.ndarray, fs: float, calibration_offset_db: float = 0.0) -> AnalysisReport:
     x = np.asarray(samples, dtype=np.float64)
     if x.ndim > 1:

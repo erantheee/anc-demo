@@ -32,10 +32,19 @@ def evaluate_before_after(before: np.ndarray, after: np.ndarray, fs: float,
     a_before = ra.spl_db_a if ra.spl_db_a is not None else ra.rms_db
     a_after = rb.spl_db_a if rb.spl_db_a is not None else rb.rms_db
 
+    # 音调降噪：顶部谱峰的中位降噪量——谐波消除的主要指标。
+    # 宽带数会被房间本底噪声/扬声器回采干扰，峰降噪更能反映"听到了什么"。
+    tone_reductions = [p["reduction_db"] for p in peak_reductions]
+    tone_reduction_db = None
+    if tone_reductions:
+        srt = sorted(tone_reductions)
+        tone_reduction_db = round(float(np.median(srt)), 2)
+
     return {
         "before": to_dict(ra),
         "after": to_dict(rb),
         "broadband_reduction_db": round(ra.rms_db - rb.rms_db, 2),
         "a_weighted_reduction_db": round(a_before - a_after, 2),
+        "tone_reduction_db": tone_reduction_db,
         "peak_reductions": peak_reductions,
     }

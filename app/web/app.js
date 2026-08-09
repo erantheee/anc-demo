@@ -74,7 +74,7 @@ function updateLive(s) {
 
   // 噪声
   const spl = s.mic_ok === false ? null : (s.spl_db ?? s.rms_db);
-  $("spl-num").textContent = spl === null ? "--" : spl.toFixed(0);
+  $("spl-num").textContent = spl === null ? "--" : spl.toFixed(1);
   $("spl-num").classList.toggle("dim", spl === null);
   $("dominant").textContent = fmt(s.mic_ok === false ? null : s.dominant_freq, " Hz");
   $("source-guess").textContent = s.mic_ok === false
@@ -92,6 +92,53 @@ function updateLive(s) {
     drawSpectrum(s.spectrum_freqs, s.spectrum_db);
   }
 }
+
+// ---------- 麦克风标定 ----------
+async function pollCalib() {
+  try {
+    const res = await fetch("/api/calibration");
+    const r = await res.json();
+    if (r.configured) {
+      $("calib-offset").textContent = `${r.offset_db} dB`;
+      $("spl-unit").textContent = "dB SPL";
+      const info = r.info || {};
+      $("calib-note").textContent = `已标定：${info.calibrated_at || ""}，参考 ${info.known_spl_db} dB，
+      测得 ${info.measured_rms_db} dBFS → 偏移 ${r.offset_db} dB。当前读数为绝对声压级。`;
+    } else {
+      $("calib-offset").textContent = "未标定（dBFS 相对值）";
+      $("spl-unit").textContent = "dB";
+      $("calib-note").textContent = "用手机声级计 APP 在麦克风处读出真实 SPL，填入后标定，仪表盘与 ANC 报告即显示绝对 dB SPL（当前未标定时显示 dBFS 相对值，数值偏小属正常）。";
+    }
+  } catch { /* 标定服务不可用时忽略 */ }
+}
+
+$("calib-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  setButton($("calib-start"), true, "标定中…（请保持环境噪声稳定）");
+  const body = {
+    known_spl: parseFloat($("calib-known-spl").value) || 75,
+    duration_s: parseFloat($("calib-duration").value) || 8,
+  };
+  try {
+    const res = await fetch("/api/calibration", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const r = await res.json();
+    if (r.ok) {
+      $("calib-offset").textContent = `${r.offset_db} dB`;
+      $("spl-unit").textContent = "dB SPL";
+      $("calib-note").textContent = `标定成功：参考 ${r.known_spl_db} dB，测得 ${r.measured_rms_db} dBFS，
+      偏移 ${r.offset_db} dB。现在显示的是绝对 dB SPL。`;
+    } else {
+      $("calib-note").textContent = "标定失败: " + (r.error || "未知错误");
+    }
+  } catch {
+    $("calib-note").textContent = "标定失败: 无法连接服务";
+  }
+  setButton($("calib-start"), false, "开始标定");
+});
 
 function setPiStatus(cls, text) {
   $("pi-dot").className = "dot " + cls;
@@ -523,6 +570,7 @@ function renderAncReport(r) {
     <div class="row"><span>基频 f0</span><strong>${r.f0_hz ? r.f0_hz.toFixed(1) + " Hz" : "—"}</strong></div>
     <div class="row"><span>基线 SPL</span><strong>${r.baseline_spl_db ?? "—"} dB</strong></div>
     <div class="row"><span>降噪后 SPL</span><strong>${r.cancelling_spl_db ?? "—"} dB</strong></div>
+    <div class="row"><span>音调降噪（中位）</span><strong class="good">${r.tone_reduction_db ?? "—"} dB</strong></div>
     <div class="row"><span>宽带降噪</span><strong class="good">${r.broadband_reduction_db.toFixed(1)} dB</strong></div>
     <div class="row"><span>A 加权降噪</span><strong class="good">${r.a_weighted_reduction_db.toFixed(1)} dB</strong></div>
     ${peaks ? `<div class="row"><span>音调峰值</span></div>${peaks}` : ""}
@@ -538,12 +586,50 @@ async function pollAnc() {
     $("anc-state").textContent = st.state === "idle" ? "空闲" : st.state;
     $("anc-phase").textContent = ancPhaseText(st.phase);
     $("anc-mic-delay-now").textContent = st.mic_delay_ms != null ? st.mic_delay_ms.toFixed(1) + " ms" : "—";
+    const scanned = st.delay_scan_ms;
+    if (scanned != null) {
+      $("anc-mic-delay-now").textContent += "（自动校准 " + scanned.toFixed(1) + " ms）";
+    }
     $("anc-f0-now").textContent = st.f0 ? st.f0.toFixed(1) + " Hz" : "—";
     $("anc-base-db").textContent = st.baseline_spl_db ?? "—";
     $("anc-now-db").textContent = st.spl_now_db ?? "—";
     const red = st.reduction_db;
     $("anc-reduction").textContent = red != null ? red.toFixed(1) + " dB" : "—";
     if (st.error) $("anc-state").textContent = "错误";
+
+    // watchdog 状态与日志
+    const wd = st.watchdog || {};
+    $("anc-wd-stat").textContent = wd.enabled
+      ? `开启（降 ${wd.reduce_count ?? 0} 次 / 升 ${wd.increase_count ?? 0} 次）`
+      : "关闭";
+    renderWdLog(wd.log || []);
+
+    // 人声门控状态：说话声出现时静音反相输出（避免"吃掉"人声）
+    const vg = st.voice_gate || {};
+    if (vg.mute) {
+      $("anc-voice-gate").textContent = "静音（检测到人声）";
+      $("anc-voice-gate").className = "warn";
+    } else {
+      $("anc-voice-gate").textContent = "正常";
+      $("anc-voice-gate").className = "good";
+    }
+
+    // 风噪门控状态：低频能量占比超阈值时静音反相输出
+    const wg = st.wind_gate || {};
+    if (wg.enabled) {
+      const ratioStr = wg.diff_ratio != null ? `差分 ${wg.diff_ratio.toFixed(2)}`
+        : wg.lf_ratio != null ? `LF ${wg.lf_ratio.toFixed(2)}` : "—";
+      if (wg.mute) {
+        $("anc-wind-gate-now").textContent = `静音（${ratioStr}）`;
+        $("anc-wind-gate-now").className = "warn";
+      } else {
+        $("anc-wind-gate-now").textContent = `正常（${ratioStr}）`;
+        $("anc-wind-gate-now").className = "good";
+      }
+    } else {
+      $("anc-wind-gate-now").textContent = "关闭";
+      $("anc-wind-gate-now").className = "";
+    }
 
     if (st.phase === "cancelling") {
       setAncButton(true, "降噪中…");
@@ -582,6 +668,13 @@ async function pollAncSource() {
     $("anc-source-f0").textContent = r.recommended_f0
       ? r.recommended_f0.toFixed(1) + " Hz" : "—";
     const feas = r.feasibility || {};
+    if (r.is_voice) {
+      $("anc-source-feas").textContent = "不适用（检测到人声）";
+      $("anc-source-notes").textContent =
+        "检测到人声/语音：ANC 只对稳态周期噪声（电机/风扇/打印机）有效，"
+        + "对说话声会反向消除、像\"吃掉\"人声。请等人声停止，或只对设备噪声启动 ANC。";
+      return; // 人声不作为 ANC 目标：不预置 f0，不提示启动
+    }
     $("anc-source-feas").textContent = r.anc_worthwhile
       ? "值得（音调成分可消除）" : "收益有限";
     let notes = r.notes || "";
@@ -622,16 +715,41 @@ function drawAncTrend() {
   ctx.fillText(`${hi} dB`, 4, 12);
 }
 
+let wdLogShown = null;
+function renderWdLog(log) {
+  const box = $("anc-wd-log");
+  const list = $("anc-wd-log-list");
+  const key = JSON.stringify(log);
+  if (key === wdLogShown) return;
+  wdLogShown = key;
+  if (!log.length) {
+    box.classList.add("hidden");
+    list.innerHTML = "";
+    return;
+  }
+  box.classList.remove("hidden");
+  list.innerHTML = log.slice(-10).reverse().map((e) => {
+    const cls = e.action === "reduce_gain" ? "wd-reduce"
+      : e.action === "increase_gain" ? "wd-increase" : "";
+    return `<li class="${cls}">${esc(e.msg)}<span class="wd-t">${e.t}s</span></li>`;
+  }).join("");
+}
+
 $("anc-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   setAncButton(true, "启动中…");
   ancHistory = [];
+  wdLogShown = null;
   drawAncTrend();
   const body = {
     synthetic: $("anc-synthetic").checked,
+    watchdog_enabled: $("anc-watchdog").checked,
+    wind_gate_enabled: $("anc-wind-gate").checked,
+    dual_mic: $("anc-dual-mic").checked,
     f0: parseFloat($("anc-f0").value) || null,
-    gain: parseFloat($("anc-gain").value) || 0.08,
+    gain: parseFloat($("anc-gain").value) || 0.5,
     mic_delay_ms: parseFloat($("anc-mic-delay").value) ?? 5.0,
+    input_highpass_hz: parseFloat($("anc-highpass").value) || 0,
     baseline_s: parseFloat($("anc-baseline").value) || 5,
     duration_s: parseFloat($("anc-duration").value) || 60,
   };
@@ -652,13 +770,140 @@ $("anc-stop").addEventListener("click", async () => {
   setAncButton(false, "开始 ANC");
 });
 
+// ---------- Kimi 噪声检测 Agent ----------
+const AGENT_POLL_MS = 1500;
+let agentLastState = null;
+
+function setAgentButton(disabled, text) {
+  $("agent-start").disabled = disabled;
+  $("agent-start").textContent = text;
+}
+
+function agentStateText(st) {
+  if (st.state === "running") return "检测中…";
+  if (st.state === "done") return "已完成";
+  if (st.state === "error") return "失败";
+  return st.configured ? "空闲" : "未配置";
+}
+
+function renderAgentResult(r) {
+  const box = $("agent-result");
+  if (!r) {
+    box.classList.add("hidden");
+    return;
+  }
+  box.classList.remove("hidden");
+  const signalMap = {
+    environment_noise: "环境噪声",
+    acoustic_feedback: "声反馈（啸叫）",
+    suspected_feedback: "疑似啸叫",
+    uncertain: "不确定",
+  };
+  $("agent-signal").textContent = signalMap[r.signal_class] || "—";
+  $("agent-signal").className = (r.signal_class === "acoustic_feedback" || r.signal_class === "suspected_feedback")
+    ? "bad" : "";
+  $("agent-howling").textContent = r.is_howling ? "是" : "否";
+  $("agent-howling").className = r.is_howling ? "bad" : "good";
+  $("agent-source").textContent = r.source_name || r.source_id || "未识别";
+  $("agent-conf").textContent = r.confidence != null
+    ? `${Math.round(r.confidence * 100)}%` : "—";
+  const freq = r.dominant_freq_hz != null ? `${r.dominant_freq_hz.toFixed(1)} Hz` : "—";
+  const f0 = r.recommended_f0_hz != null ? `${r.recommended_f0_hz.toFixed(1)} Hz` : "—";
+  $("agent-freq").textContent = `${freq} / ${f0}`;
+  $("agent-anc").textContent = r.anc_worthwhile ? "值得（可做 ANC）" : "收益有限";
+  $("agent-anc").className = r.anc_worthwhile ? "good" : "";
+  $("agent-summary").textContent = r.summary || "";
+
+  let html = "";
+  if (r.howling_freq_hz != null) {
+    html += `<p class="hint">啸叫/声反馈候选频率：${esc(r.howling_freq_hz.toFixed(1))} Hz</p>`;
+  }
+  if (r.anc_adjustments && r.anc_adjustments.length) {
+    html += `<h3>ANC 调节（已执行）</h3><ul class="agent-list">` +
+      r.anc_adjustments.map((a) => `<li>${esc(a.action || "")}${a.value != null ? ` = ${esc(String(a.value))}` : ""} — ${esc(a.reason || "")}</li>`).join("") + `</ul>`;
+  }
+  if (r.reasons && r.reasons.length) {
+    html += `<h3>判据</h3><ul class="agent-list">` +
+      r.reasons.map((s) => `<li>${esc(s)}</li>`).join("") + `</ul>`;
+  }
+  if (r.actions && r.actions.length) {
+    html += `<h3>建议动作</h3><ul class="agent-list">` +
+      r.actions.map((s) => `<li>${esc(s)}</li>`).join("") + `</ul>`;
+  }
+  if (r.reference_mic) {
+    html += `<p class="hint">参考麦克风：${esc(r.reference_mic)}</p>`;
+  }
+  if (r.quiet_zone_advice) {
+    html += `<p class="hint">静音区：${esc(r.quiet_zone_advice)}</p>`;
+  }
+  $("agent-detail").innerHTML = html;
+}
+
+async function pollAgent() {
+  try {
+    const res = await fetch("/api/agent/status");
+    const st = await res.json();
+    $("agent-state").textContent = agentStateText(st);
+    $("agent-state").className = st.state === "error" ? "bad" : "";
+    $("agent-config").textContent = st.configured
+      ? "可用" : (st.configured_reason || "未配置");
+    $("agent-model").textContent = st.configured ? (st.model || "kimi-k3") : "—";
+    $("agent-elapsed").textContent = st.elapsed_s != null ? st.elapsed_s + " s" : "—";
+    $("agent-tools").textContent = (st.tools_used || []).length
+      ? st.tools_used.join(", ") : "—";
+
+    if (st.state === "running") {
+      setAgentButton(true, "检测中…");
+    } else {
+      setAgentButton(false, "开始 AI 检测");
+      // 任务结束且结论变化时刷新结果展示
+      const changed = JSON.stringify(st.result) !== JSON.stringify(agentLastState);
+      if (st.state === "done" && changed) {
+        agentLastState = st.result;
+        renderAgentResult(st.result);
+      }
+      if (st.state === "error") {
+        $("agent-result").classList.remove("hidden");
+        $("agent-summary").textContent = "检测失败: " + (st.error || "");
+      }
+    }
+  } catch { /* 轮询失败忽略 */ }
+}
+
+$("agent-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  setAgentButton(true, "启动中…");
+  agentLastState = null;
+  $("agent-result").classList.add("hidden");
+  const body = {
+    fresh_sample: $("agent-fresh").checked,
+    duration_s: parseFloat($("agent-duration").value) || 3,
+    synthetic: $("agent-synthetic").checked,
+  };
+  const res = await fetch("/api/agent/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const r = await res.json();
+  if (!r.started) {
+    setAgentButton(false, "开始 AI 检测");
+    $("agent-state").textContent = r.message || "启动失败";
+  }
+  pollAgent();
+});
+
 // ---------- 启动 ----------
 $("grid-form").addEventListener("submit", startGrid);
 pollLive();
 setInterval(pollLive, LIVE_MS);
+pollCalib();  // 麦克风标定状态
+setInterval(pollCalib, 15000);
 pollGrid();  // 恢复已完成的网格测量结果（刷新页面后）
 pollAncSource();
 setInterval(pollAncSource, 3000);
 pollAnc();
 setInterval(pollAnc, ANC_POLL_MS);
+pollAgent();
+setInterval(pollAgent, AGENT_POLL_MS);
 drawMap();

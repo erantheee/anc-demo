@@ -8,3 +8,5 @@ data/recordings/
 data/reports/
 *.log
 .DS_Store
+# Kimi API Key（勿提交）
+.env

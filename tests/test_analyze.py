@@ -1,7 +1,8 @@
 import numpy as np
 
-from app.analyze import (a_weight_db, analyze, find_harmonic_family, find_peaks,
-                         rms_db, spectrum_db, stable_segment, tonality_ratio)
+from app.analyze import (a_weight_db, analyze, fast_spl_db, find_harmonic_family,
+                         find_peaks, rms_db, spectrum_db, stable_segment,
+                         tonality_ratio)
 from app.synth import printer_noise
 
 
@@ -72,3 +73,61 @@ def test_stable_segment_keeps_clean_signal():
     x = 0.05 * np.sin(2 * np.pi * 200 * np.arange(fs) / fs)
     kept = stable_segment(x, fs)
     assert len(kept) > len(x) * 0.7
+
+
+# ---- 灵敏实时 SPL（短窗峰值，敲击立即可见） ----
+
+def test_fast_spl_db_reflects_short_burst():
+    """短促响脉冲（模拟敲击外壳）应显著抬高快速 SPL。
+
+    旧路径（2s 整段 RMS + stable_segment 剔除瞬态）对敲击几乎无反应；
+    fast_spl_db 用 0.1s 短窗峰值保持，脉冲所在帧能量不被长窗稀释，
+    灵敏度应明显高于整段 RMS。
+    """
+    fs = 16000
+    rng = np.random.default_rng(0)
+    quiet = 0.01 * rng.standard_normal(int(2.0 * fs))  # 安静背景 ~ -40 dB
+    burst = quiet.copy()
+    start = int(1.0 * fs)
+    burst[start:start + int(0.03 * fs)] += 0.5  # 30ms 响脉冲
+
+    fast_quiet, _ = fast_spl_db(quiet, fs)
+    fast_burst, _ = fast_spl_db(burst, fs)
+    jump_fast = fast_burst - fast_quiet
+    jump_whole = rms_db(burst) - rms_db(quiet)
+    # 短窗峰值路径的灵敏度应明显高于整段 RMS（至少多 8 dB），
+    # 且自身跳升显著（> 15 dB）
+    assert jump_fast > 15.0, \
+        f"敲击应显著抬高快速 SPL: {fast_quiet:.1f} -> {fast_burst:.1f}"
+    assert jump_fast - jump_whole > 8.0, \
+        f"快速路径灵敏度应远超整段 RMS: fast={jump_fast:.1f}dB vs whole={jump_whole:.1f}dB"
+
+
+def test_fast_spl_db_stable_when_quiet():
+    """安静背景下快速 SPL 读数稳定（不因无信号而乱跳）。"""
+    fs = 16000
+    rng = np.random.default_rng(1)
+    x1 = 0.01 * rng.standard_normal(int(2.0 * fs))
+    x2 = 0.01 * rng.standard_normal(int(2.0 * fs))
+    a, _ = fast_spl_db(x1, fs)
+    b, _ = fast_spl_db(x2, fs)
+    assert abs(a - b) < 3.0, f"安静背景下读数应稳定: {a:.1f} vs {b:.1f}"
+
+
+def test_fast_spl_db_single_frame_input():
+    """输入短于一个窗（如 <0.1s）时退化为整段 RMS，不崩溃。"""
+    fs = 16000
+    rng = np.random.default_rng(3)
+    x = 0.05 * rng.standard_normal(int(0.05 * fs))  # 50ms < 0.1s 窗
+    db, db_a = fast_spl_db(x, fs)
+    assert np.isfinite(db) and np.isfinite(db_a)
+    assert abs(db - rms_db(x)) < 0.5
+
+
+def test_fast_spl_db_pure_sine_level():
+    """纯正弦输入：短窗峰值 RMS ≈ 正弦 RMS（-3 dBFS）。"""
+    fs = 16000
+    t = np.arange(int(1.0 * fs)) / fs
+    x = np.sin(2 * np.pi * 440 * t)
+    db, _ = fast_spl_db(x, fs)
+    assert abs(db - (-3.0)) < 0.5

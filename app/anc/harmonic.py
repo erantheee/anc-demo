@@ -44,9 +44,13 @@ def _refine_fundamental(x: np.ndarray, fs: float, f_coarse: float,
     return float(best_f)
 
 
-def estimate_fundamental(x: np.ndarray, fs: float, low: float = 40.0,
+def estimate_fundamental(x: np.ndarray, fs: float, low: float = 80.0,
                          high: float = 500.0) -> float | None:
-    """自相关法估计基频，返回 Hz；含倍频校正与抛物线精化。无显著周期返回 None。"""
+    """自相关法估计基频，返回 Hz；含倍频校正与抛物线精化。无显著周期返回 None。
+
+    low 默认 80Hz：排除 50/60Hz 市电哼声，避免把电网噪声当周期源
+    （50Hz 谐波消除无意义，且会浪费谐波消除器权重）。
+    """
     from scipy.signal import find_peaks
 
     x = np.asarray(x, dtype=np.float64)

@@ -41,3 +41,15 @@
 - 静态谐波消除对基频漂移敏感（离线估计精度 0.1 Hz 量级），实时需要频率跟踪。
 - 来源归属在频谱高度重叠的源之间（3D 打印机 vs 风机）只给出概率排序，需人工确认。
 - 未标定 SPL 时为 dBFS（相对值），标定后才能显示绝对 dB SPL。
+
+## 噪声检测 Agent 后续
+
+- [ ] **LLM 质量 eval 基线**：为 `agent.py` 的 SYSTEM_PROMPT + AGENT_TOOLS 建立离线质量 eval——
+  一组固定合成噪声场景（打印机/风扇/啸叫/静音），真实 API Key 跑 Agent，断言 JSON schema
+  完整、signal_class 正确、啸叫场景 anc_worthwhile=false。提示词/工具 schema 是 LLM 面向的，
+  改了没有质量回归保护；现有 stub 测试只覆盖机械行为（工具循环、JSON 解析），不验证输出质量。
+  依赖：无，建议在代码上传 GitHub 后启动。
+- [ ] **P1 Agent 自主周期判断**：Agent 按固定周期（如每 N 分钟）自动跑一次检测，发现啸叫/
+  降噪失效时自主调增益，异常时通知。用户明确担忧决策错误，推迟到上传 GitHub + 真机 demo
+  验证残差分析有效之后。闭环能力（adjust_anc + watchdog 边界 + 残差分析）本批已就位，
+  启动时只需加调度器 + 决策确认机制。

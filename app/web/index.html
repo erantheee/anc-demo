@@ -40,6 +40,17 @@
       </div>
       <canvas id="spectrum" width="640" height="180"></canvas>
       <p class="hint" id="live-hint">监控每 3 秒采样一次，请让麦克风对准噪声源。</p>
+      <div class="calib-box">
+        <h3>麦克风标定</h3>
+        <div class="row"><span>当前偏移</span><strong id="calib-offset">—</strong></div>
+        <form id="calib-form" class="grid-form">
+          <label>声级计读数(dB) <input type="number" id="calib-known-spl" value="75" step="1"></label>
+          <label>采样(s) <input type="number" id="calib-duration" value="8" step="1" min="2" max="30"></label>
+          <button type="submit" id="calib-start" class="primary">开始标定</button>
+        </form>
+        <p class="hint" id="calib-note">用手机声级计 APP 在麦克风处读出真实 SPL，填入后标定，
+        仪表盘与 ANC 报告即显示绝对 dB SPL（当前未标定时显示 dBFS 相对值，数值偏小属正常）。</p>
+      </div>
     </section>
 
     <!-- 建模 -->
@@ -110,9 +121,13 @@
       </div>
       <form id="anc-form" class="grid-form">
         <label class="check"><input type="checkbox" id="anc-synthetic"> 合成模式</label>
+        <label class="check"><input type="checkbox" id="anc-watchdog" checked> 自动调节（watchdog 防啸叫/补增益）</label>
+        <label class="check"><input type="checkbox" id="anc-wind-gate"> 风噪门控（静音反相输出）</label>
+        <label class="check"><input type="checkbox" id="anc-dual-mic"> 双麦差分风噪检测</label>
         <label>基频 f0(Hz) <input type="number" id="anc-f0" placeholder="自动估计"></label>
-        <label>输出增益 <input type="number" id="anc-gain" value="0.08" step="0.01"></label>
-        <label>麦克风延迟(ms) <input type="number" id="anc-mic-delay" value="5" step="0.5" min="0"></label>
+        <label>输出增益 <input type="number" id="anc-gain" value="0.5" step="0.05"></label>
+        <label>麦克风延迟(ms) <input type="number" id="anc-mic-delay" value="40" step="0.5" min="0"></label>
+        <label>输入高通(Hz) <input type="number" id="anc-highpass" value="0" step="10" min="0"></label>
         <label>基线(s) <input type="number" id="anc-baseline" value="5" step="1"></label>
         <label>时长(s) <input type="number" id="anc-duration" value="60" step="5"></label>
         <button type="submit" id="anc-start" class="primary">开始 ANC</button>
@@ -126,12 +141,53 @@
         <div class="row"><span>基线 SPL</span><strong id="anc-base-db">—</strong></div>
         <div class="row"><span>实时 SPL</span><strong id="anc-now-db">—</strong></div>
         <div class="row"><span>总降噪</span><strong id="anc-reduction">—</strong></div>
+        <div class="row"><span>自动调节</span><strong id="anc-wd-stat">—</strong></div>
+        <div class="row"><span>人声门控</span><strong id="anc-voice-gate">—</strong></div>
+        <div class="row"><span>风噪门控</span><strong id="anc-wind-gate-now">—</strong></div>
+      </div>
+      <div id="anc-wd-log" class="wd-log hidden">
+        <h3>自动调节日志</h3>
+        <ul id="anc-wd-log-list"></ul>
       </div>
       <canvas id="anc-trend" width="640" height="140"></canvas>
-      <p class="hint">噪声由手机 / 电脑在旁边播放，树莓派的误差麦克风采集后实时输出反相谐波。对步进电机 / 风扇 / 压缩机等稳态周期噪声有效。</p>
+      <p class="hint">噪声由手机 / 电脑在旁边播放，树莓派的误差麦克风采集后实时输出反相谐波。对步进电机 / 风扇 / 压缩机等稳态周期噪声有效。
+      麦克风延迟默认 40ms（本机 USB 声卡实测环路延迟；换设备请用
+      <code>scripts/measure_loop_delay.py</code> 重新测量）。</p>
       <div id="anc-report" class="anc-report hidden">
         <h3>A/B 降噪报告</h3>
         <div id="anc-report-body"></div>
+      </div>
+    </section>
+
+    <!-- Kimi 噪声检测 Agent -->
+    <section class="card" id="card-agent">
+      <h2>AI 噪声检测（Kimi Agent）</h2>
+      <p class="hint">由 Kimi K3 驱动的噪声自动检测 Agent：读取频谱分析 → 识别噪声源 →
+      判断是否值得降噪 → 给出参考麦克风与静音区建议。ANC 运行中时，Agent 还能直接
+      调节引擎（啸叫→降增益/停止，降噪不足→增增益），与规则式 watchdog 一起做闭环控制。</p>
+      <form id="agent-form" class="grid-form">
+        <label class="check"><input type="checkbox" id="agent-synthetic"> 合成模式</label>
+        <label>采样(s) <input type="number" id="agent-duration" value="3" step="1" min="1" max="30"></label>
+        <label class="check"><input type="checkbox" id="agent-fresh" checked> 先重新采样</label>
+        <button type="submit" id="agent-start" class="primary">开始 AI 检测</button>
+      </form>
+      <div class="anc-status">
+        <div class="row"><span>Agent 状态</span><strong id="agent-state">—</strong></div>
+        <div class="row"><span>配置</span><strong id="agent-config">—</strong></div>
+        <div class="row"><span>模型</span><strong id="agent-model">—</strong></div>
+        <div class="row"><span>耗时</span><strong id="agent-elapsed">—</strong></div>
+        <div class="row"><span>工具调用</span><strong id="agent-tools">—</strong></div>
+      </div>
+      <div id="agent-result" class="anc-report hidden">
+        <h3>检测结论</h3>
+        <div class="row"><span>信号分类</span><strong id="agent-signal">—</strong></div>
+        <div class="row"><span>啸叫</span><strong id="agent-howling">—</strong></div>
+        <div class="row"><span>噪声源</span><strong id="agent-source">—</strong></div>
+        <div class="row"><span>置信度</span><strong id="agent-conf">—</strong></div>
+        <div class="row"><span>主频 / 建议基频</span><strong id="agent-freq">—</strong></div>
+        <div class="row"><span>建议降噪</span><strong id="agent-anc">—</strong></div>
+        <p id="agent-summary" class="hint"></p>
+        <div id="agent-detail"></div>
       </div>
     </section>
   </main>

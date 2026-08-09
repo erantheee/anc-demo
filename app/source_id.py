@@ -72,8 +72,12 @@ def match_sources(report: AnalysisReport, profiles: list[dict] | None = None) ->
     return sorted(hits, key=lambda h: (h.confidence, len(h.matched_signatures)), reverse=True)
 
 
-def recommend_anc(report: AnalysisReport) -> dict:
-    """根据分析报告给出"是否需要降噪"的量化建议。"""
+def recommend_anc(report: AnalysisReport, voice: dict | None = None) -> dict:
+    """根据分析报告给出"是否需要降噪"的量化建议。
+
+    voice 可选：detect_voice 的结果 dict。人声被判定为 is_voice 时强制
+    anc_worthwhile=False——谐波消除对说话声只会反向"吃掉"，不值得启动 ANC。
+    """
     fund = report.harmonic_family[0] if report.harmonic_family else (report.dominant_freq or 0.0)
     reasons: list[str] = []
     worthwhile = False
@@ -94,9 +98,14 @@ def recommend_anc(report: AnalysisReport) -> dict:
     if high_band - low_band > 6:
         reasons.append("wideband_high_freq_use_passive")
 
+    if voice and voice.get("is_voice"):
+        reasons.append("human_speech_detected")
+        worthwhile = False
+
     return {
         "anc_worthwhile": worthwhile,
         "reasons": reasons,
         "dominant_freq": fund,
         "tonality_ratio": round(report.tonality_ratio, 3),
+        "voice": voice,
     }

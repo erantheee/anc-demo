@@ -3,7 +3,28 @@ from __future__ import annotations
 
 import time
 
+import numpy as np
 import pytest
+
+
+class _FakeRecorder:
+    """替代 capture.ContinuousRecorder：read 返回 payload，或抛错模拟无麦/静音。"""
+
+    is_open = True
+
+    def __init__(self, payload):
+        self.payload = payload
+
+    def open(self):
+        pass
+
+    def close(self):
+        pass
+
+    def read(self, duration):
+        if isinstance(self.payload, BaseException):
+            raise self.payload
+        return self.payload
 
 
 @pytest.fixture
@@ -11,9 +32,12 @@ def no_mic_monitor(monkeypatch):
     from app import monitor as mon
     import app.capture as cap
 
-    monkeypatch.setattr(cap, "record_buffer", lambda *a, **k: (_ for _ in ()).throw(
-        RuntimeError("未检测到任何麦克风/输入设备。请接入 USB 麦克风（或 I2S 编解码器），"
-                     "或用勾选/设置 ANC_SYNTHETIC=1 走合成模式")))
+    def _factory(**kw):
+        return _FakeRecorder(RuntimeError(
+            "未检测到任何麦克风/输入设备。请接入 USB 麦克风（或 I2S 编解码器），"
+            "或用勾选/设置 ANC_SYNTHETIC=1 走合成模式"))
+
+    monkeypatch.setattr(cap, "ContinuousRecorder", _factory)
     m = mon.Monitor(sample_s=0.5, interval_s=0.01)
     return m
 
@@ -41,12 +65,11 @@ def test_monitor_reports_no_mic(no_mic_monitor):
 
 def test_monitor_good_signal_sets_mic_ok(monkeypatch):
     from app import monitor as mon
-    import numpy as np
     import app.capture as cap
 
     rng = np.random.default_rng(1)
     good = (0.05 * rng.standard_normal(24000)).astype(np.float32)
-    monkeypatch.setattr(cap, "record_buffer", lambda *a, **k: good)
+    monkeypatch.setattr(cap, "ContinuousRecorder", lambda **kw: _FakeRecorder(good))
     m = mon.Monitor(sample_s=0.5, interval_s=0.01)
     m.start()
     try:
